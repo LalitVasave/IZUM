@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String         @id @default(uuid()) @db.Uuid
+  email           String         @unique
+  hashed_password String
+  role            String
+  verified        Boolean        @default(false)
+  created_at      DateTime       @default(now())
+  student         Student?
+  driver          Driver?
+  refresh_tokens  RefreshToken[]
+}
+
+model Student {
+  id              String  @id @default(uuid()) @db.Uuid
+  user_id         String  @unique @db.Uuid
+  user            User    @relation(fields: [user_id], references: [id])
+  name            String
+  college_id_hash String?
+  phone_hash      String?
+}
+
+model Driver {
+  id         String  @id @default(uuid()) @db.Uuid
+  user_id    String  @unique @db.Uuid
+  user       User    @relation(fields: [user_id], references: [id])
+  license_no String?
+  bus_id     String? @db.Uuid
+  bus        Bus?    @relation(fields: [bus_id], references: [id])
+  active     Boolean @default(false)
+}
+
+model Bus {
+  id              String            @id @default(uuid()) @db.Uuid
+  route_id        String            @db.Uuid
+  route           Route             @relation(fields: [route_id], references: [id])
+  plate           String
+  active          Boolean           @default(true)
+  drivers         Driver[]
+  driver_checkins DriverCheckin[]
+  anomaly_logs    AnomalyLog[]
+  anomaly_reports AnomalyReport[]
+}
+
+model Route {
+  id        String  @id @default(uuid()) @db.Uuid
+  name      String
+  waypoints Json
+  buses     Bus[]
+  stops     Stop[]
+}
+
+model Stop {
+  id       String @id @default(uuid()) @db.Uuid
+  route_id String @db.Uuid
+  route    Route  @relation(fields: [route_id], references: [id])
+  name     String
+  lat      Float
+  lng      Float
+  sequence Int
+}
+
+model RefreshToken {
+  jti        String   @id
+  user_id    String   @db.Uuid
+  user       User     @relation(fields: [user_id], references: [id])
+  expires_at DateTime
+  revoked    Boolean  @default(false)
+}
+
+model SosEvent {
+  id              String   @id @default(uuid()) @db.Uuid
+  student_id_hash String
+  bus_id          String?  @db.Uuid
+  lat             Float
+  lng             Float
+  ts              DateTime @default(now())
+  status          String
+  cancelled       Boolean  @default(false)
+}
+
+model EscortToken {
+  token               String   @id
+  student_id          String   @db.Uuid
+  bus_id              String   @db.Uuid
+  destination_stop_id String   @db.Uuid
+  expires_at          DateTime
+  used                Boolean  @default(false)
+}
+
+model DriverCheckin {
+  id              String   @id @default(uuid()) @db.Uuid
+  driver_id       String   @db.Uuid
+  bus_id          String   @db.Uuid
+  bus             Bus      @relation(fields: [bus_id], references: [id])
+  ts              DateTime @default(now())
+  late_night_mode Boolean  @default(false)
+}
+
+model AnomalyLog {
+  id                 String    @id @default(uuid()) @db.Uuid
+  bus_id             String    @db.Uuid
+  bus                Bus       @relation(fields: [bus_id], references: [id])
+  type               String
+  stationary_minutes Int
+  detected_at        DateTime  @default(now())
+  resolved_at        DateTime?
+}
+
+model AnomalyReport {
+  id         String   @id @default(uuid()) @db.Uuid
+  bus_id     String   @db.Uuid
+  bus        Bus      @relation(fields: [bus_id], references: [id])
+  student_id String   @db.Uuid
+  reason     String
+  created_at DateTime @default(now())
+}

@@ -1,0 +1,3043 @@
+=== PAGE DOCS ===
+IZUM
+Production — Detailed Page-by-Page Documentation
+Full-Stack  |  TypeScript + Python  |  14 Pages  |  No Docker Constraint
+Auth
+Core App
+Status/System
+Safety
+Docs Site
+R1
+Registration Page
+Auth Page
+Purpose & Scope
+The Registration page is the entry point for all new users — students, drivers, and admins. It collects identity information, validates it client and server side, creates a database record, and issues a JWT pair so the user lands directly on their role-appropriate dashboard without a separate login step.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+All frontend logic — type-safe form state, validation, API calls
+Build Tool
+Vite
+5.2+
+Fast dev server + production bundle (zero-config TS support)
+UI Framework
+React
+18.3+
+Component tree: RegistrationForm, FieldInput, RoleSelector, SubmitButton
+Form Library
+React Hook Form
+7.51+
+Uncontrolled form state, field-level validation, submit handling
+Validation
+Zod
+3.23+
+Client-side schema — mirrors server Pydantic schema exactly
+HTTP Client
+Axios
+1.6+
+POST /auth/register with typed request/response interfaces
+Routing
+React Router v6
+6.23+
+Redirect to /map (student), /driver (driver), /admin after success
+Styling
+Tailwind CSS
+3.4+
+Form layout, input states (error/success/focus), responsive design
+Animations
+Framer Motion
+11+
+Field error shake, success checkmark, page transition fade
+Toast
+react-hot-toast
+2.4+
+Success and error notifications
+State
+Zustand
+4.5+
+Store JWT tokens + user object after successful registration
+Backend Stack
+Layer
+Technology
+Version
+Responsibility
+Runtime
+Node.js
+20 LTS
+TypeScript runtime for auth + API layer
+Framework
+Fastify
+4.27+
+POST /auth/register route handler
+Validation
+Zod + fastify-type-provider-zod
+3.23+
+Request body validation — rejects malformed payloads before DB touch
+ORM
+Prisma
+5.14+
+Insert users + students/drivers rows in PostgreSQL transaction
+Password
+bcrypt (Node)
+5.1+
+Hash password with cost factor 12 before storage
+JWT
+jose (TypeScript)
+5.2+
+Sign RS256 access token (15min) + refresh token (7 days)
+Database
+PostgreSQL
+16
+Persist user, student/driver profile rows
+Email (opt)
+Resend
+3.2+
+Send verification email — optional for production v1
+Rate Limit
+fastify-rate-limit
+9.1+
+Max 5 registration attempts per IP per hour
+API Endpoints
+Method
+Endpoint
+Auth
+Purpose
+POST
+`/auth/register`
+None (public)
+Submit registration form — create user, issue JWT pair
+GET
+`/auth/check-email`
+None (public)
+Real-time email availability check on field blur
+// POST /auth/register — TypeScript Zod schema
+const RegisterSchema = z.object({
+  name:       z.string().min(2).max(100),
+  email:      z.string().email(),
+  password:   z.string().min(8).regex(/[A-Z]/).regex(/[0-9]/),
+  role:       z.enum(["student", "driver", "admin"]),
+  college_id: z.string().optional(),   // required if role=student
+  license_no: z.string().optional(),   // required if role=driver
+});
+// 201 Created — Response
+{
+  "access_token":  "eyJhbGciOiJSUzI1NiJ9...",
+  "refresh_token": "eyJhbGciOiJSUzI1NiJ9...",
+  "token_type":    "bearer",
+  "user": { "id": "uuid", "name": "Aditya Patil", "role": "student" }
+}
+// 409 Conflict — email already registered
+{ "error": "EMAIL_TAKEN", "message": "This email is already registered" }
+Database
+Table
+Operation
+Key Columns Written
+Notes
+users
+INSERT
+id, email, hashed_password, role, created_at, verified=false
+Single transaction with student/driver row below
+students
+INSERT
+id, user_id(FK), name, college_id, phone_hash
+Only if role=student
+drivers
+INSERT
+id, user_id(FK), license_no, bus_id=null, active=false
+Only if role=driver — bus assigned later by admin
+refresh_tokens
+INSERT
+token(JTI), user_id(FK), expires_at, revoked=false
+Stored for rotation + revocation support
+Registration Flow — Step by Step
+Step
+Actor
+Action
+Tech
+1
+User
+Fills name, email, password, role, college_id fields
+React Hook Form + Zod client validation
+2
+Browser
+On email blur → GET /auth/check-email
+Axios, debounced 400ms
+3
+Fastify
+Queries users table by email, returns { available }
+Prisma findUnique
+4
+User
+Submits form
+React Hook Form handleSubmit
+5
+Browser
+POST /auth/register with validated body
+Axios + Zod-parsed body
+6
+Fastify
+Validates body via Zod schema
+fastify-type-provider-zod
+7
+Fastify
+Checks email uniqueness in DB
+Prisma — 409 if duplicate
+8
+Fastify
+Hashes password (bcrypt cost 12)
+bcrypt.hash()
+9
+Fastify
+Inserts users + students/drivers in DB transaction
+Prisma $transaction
+10
+Fastify
+Signs RS256 access + refresh tokens
+jose SignJWT
+11
+Fastify
+Returns 201 with token pair + user object
+Fastify reply.code(201).send()
+12
+Browser
+Stores tokens in Zustand, sets httpOnly cookie via API
+Zustand + document.cookie
+13
+Browser
+Redirects to role dashboard
+React Router navigate()
+Security Considerations
+Password stored as bcrypt hash with cost factor 12 — never plain text, never MD5/SHA1.
+Email check endpoint is rate-limited (20 req/min per IP) to prevent email enumeration.
+college_id and phone number are hashed (SHA-256) before storage — not searchable in plain form.
+JWT uses RS256 (asymmetric) — private key signs, public key verifies — private key never leaves server.
+Registration endpoint rate-limited to 5 attempts/hour/IP to prevent mass account creation.
+For production v1, email verification is optional but recommended. The verified flag in the users table is pre-built for this — flip it to required when email relay is configured.
+R2
+Login Page
+Auth Page
+Purpose & Scope
+The Login page authenticates returning users, issues a short-lived access token and a long-lived refresh token, and routes them to their role-appropriate dashboard. The token strategy is designed for production security: access tokens live only in JS memory (never localStorage), refresh tokens live in httpOnly cookies (XSS-proof).
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Typed login form state, token storage, role routing
+Build
+Vite
+5.2+
+Dev server + prod bundle
+UI
+React
+18.3+
+LoginForm, PasswordField, RememberMe, RoleRedirect components
+Forms
+React Hook Form
+7.51+
+Controlled email + password fields with error states
+Validation
+Zod
+3.23+
+Client-side: email format + password non-empty before POST
+HTTP
+Axios
+1.6+
+POST /auth/login, interceptor for 401 → auto-refresh
+Routing
+React Router v6
+6.23+
+Redirect post-login based on user.role
+State
+Zustand
+4.5+
+Store access_token + user object in memory
+Styling
+Tailwind CSS
+3.4+
+Dark login card, input focus ring, error state styling
+Animation
+Framer Motion
+11+
+Card fade-in, wrong-password shake, loading spinner
+Backend Stack
+Layer
+Technology
+Version
+Responsibility
+Framework
+Fastify
+4.27+
+POST /auth/login, POST /auth/refresh, POST /auth/logout, GET /auth/me
+Password
+bcrypt (Node)
+5.1+
+Compare submitted password vs stored hash — timing-safe
+JWT
+jose (TypeScript)
+5.2+
+Sign + verify RS256 access token (15min) + refresh token (7 days)
+Cookie
+fastify-cookie
+9.3+
+Set HttpOnly Secure SameSite=Strict cookie for refresh token
+Session
+Redis (ioredis)
+5.3+
+Store access token JTI → user_id for instant revocation
+ORM
+Prisma
+5.14+
+Find user by email, fetch role + profile
+Rate Limit
+fastify-rate-limit
+9.1+
+10 login attempts per IP per 15 minutes
+Database
+PostgreSQL
+16
+users table lookup by email
+API Endpoints
+Method
+Endpoint
+Auth Required
+Purpose
+POST
+`/auth/login`
+None
+Submit credentials — returns access + refresh token
+POST
+`/auth/refresh`
+httpOnly cookie
+Exchange refresh token for new access token (silent renewal)
+POST
+`/auth/logout`
+Bearer token
+Revoke refresh token — clears Redis session + DB record
+GET
+`/auth/me`
+Bearer token
+Restore session on page load — returns user object
+// POST /auth/login — Request
+{ "email": "aditya@college.edu", "password": "SecurePass123!" }
+// 200 OK — Response
+{
+  "access_token": "eyJhbGciOiJSUzI1NiJ9...",   // 15 min expiry
+  "token_type": "bearer",
+  "user": { "id": "uuid", "name": "Aditya Patil", "role": "student" }
+  // refresh_token set as httpOnly cookie — NOT in response body
+}
+// Axios interceptor — auto-refresh on 401
+axios.interceptors.response.use(null, async (error) => {
+  if (error.response?.status === 401) {
+    await axios.post("/auth/refresh");   // cookie sent automatically
+    return axios(error.config);          // retry original request
+  }
+  return Promise.reject(error);
+});
+JWT Token Strategy
+Token
+Storage
+Expiry
+Sent Via
+Vulnerable To
+Access Token
+JS memory (Zustand)
+15 minutes
+Authorization: Bearer header
+Process death — user re-auths on tab close (acceptable)
+Refresh Token
+httpOnly cookie
+7 days
+Automatic with every /auth/* req
+Not accessible to JS — XSS-safe
+Never store tokens in localStorage or sessionStorage. Both are accessible to any JS on the page — one XSS vulnerability exposes all users. JS memory (Zustand) is wiped on tab close, which is intentional for a campus app.
+Database
+Table / Store
+Operation
+Purpose
+PostgreSQL — users
+SELECT WHERE email
+Fetch hashed_password + role for credential check
+PostgreSQL — students/drivers
+SELECT WHERE user_id
+Fetch profile data for /auth/me response
+PostgreSQL — refresh_tokens
+INSERT + SELECT
+Store new refresh JTI, check revocation on /auth/refresh
+Redis — session:{jti}
+SET EX 900
+Access token JTI → user_id (900s = 15min). DEL on logout.
+Redis — refresh:{jti}
+SET EX 604800
+Refresh token JTI → user_id (7 days). DEL on logout.
+Role-Based Routing
+Role
+Post-Login Destination
+First API Call
+Dashboard Shows
+student
+/map
+GET /api/bus/{id} + WS connect
+Live map, stop ETA, SOS shield
+driver
+/driver
+GET /api/bus/{assigned_bus_id}
+Check-in button, route view, late night status
+admin
+/admin
+GET /api/fleet + GET /api/bus/anomalies
+Fleet overview, ghost bus alerts, toggle panel
+1
+Live Map View
+Core App Page
+Purpose & Scope
+The Live Map View is the primary student interface. It shows a real-time animated bus marker on a campus map, driven by a persistent WebSocket connection. The marker never freezes — client-side dead reckoning projects its position every 100ms regardless of network quality. A confidence circle grows around the marker as signal weakens, and a status bar communicates system state honestly.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+All map logic, WS handling, dead reckoning loop
+UI
+React
+18.3+
+MapPage, BusMarker, ConfidenceCircle, StatusBar, ETACard components
+Map
+React Leaflet
+4.2+
+Declarative Leaflet map — MapContainer, TileLayer, Circle, Marker
+Map Tiles
+OpenStreetMap
+N/A
+Free tile layer — no API key required
+WebSocket
+native browser WS
+N/A
+Persistent connection to /ws/bus/{bus_id}
+Dead Reckoning
+requestAnimationFrame
+N/A
+100ms position projection from last known speed + heading
+HTTP Fallback
+Axios
+1.6+
+Poll GET /api/bus/{id}/position every 30s if WS drops
+State
+Zustand
+4.5+
+vehicleState, signalTier, etaData, confidenceRadius stores
+Styling
+Tailwind CSS
+3.4+
+Dark map overlay, frosted-glass ETA card, status bar
+Animation
+Framer Motion
+11+
+ETA card slide-up, status bar slide, marker drop bounce
+Auth
+Zustand (token)
+N/A
+Bearer token sent in WS upgrade header
+Backend Stack
+Layer
+Technology
+Version
+Responsibility
+Runtime
+Node.js
+20 LTS
+TypeScript WebSocket relay server
+Framework
+Fastify
+4.27+
+WS upgrade, REST endpoints
+WebSocket
+@fastify/websocket
+8.3+
+WS /ws/bus/{bus_id} — authenticate, subscribe Redis channel, relay
+Redis Client
+ioredis
+5.3+
+Subscribe to channel:bus:{id}, read state/position hashes
+Auth
+jose
+5.2+
+Verify Bearer token in WS Upgrade header before connection
+ML Proxy
+Axios (server)
+1.6+
+Forward /api/eta/* requests to Python ML microservice
+Python ML Microservice
+Layer
+Technology
+Version
+Responsibility
+Framework
+FastAPI
+0.111+
+Serve /eta/{stop_id} and /eta/{stop_id}/detail
+ML Model
+Scikit-learn RF
+1.4+
+RandomForestRegressor loaded at startup from eta_model.joblib
+Serializer
+Joblib
+1.4+
+Load trained model file — inference in <5ms
+Redis
+redis-py
+5+
+Read bus state/position/meta for ML feature assembly
+WebSocket Message Format
+// Inbound — GPS Simulator → Fastify WS handler
+{
+  dlat: 0.000012,   dlng: 0.000008,   dhdg: 2.1,
+  speed: 28.4,      tier: "FULL",      ts: 1714000000
+}
+// Outbound — Fastify → all connected frontend clients
+{
+  bus_id:             "bus_01",
+  state:              "ACTIVE",      // ACTIVE|SPARSE|LOST|BUFFERING|SYNCING
+  lat:                16.704521,
+  lng:                74.243100,
+  heading:            142.3,
+  speed:              28.4,
+  tier:               "FULL",        // FULL|REDUCED|MINIMAL|DEAD
+  rtt_ms:             84,
+  confidence_radius_m: 5,            // grows as signal weakens
+  buffer_count:       0,
+  ts:                 1714000000
+}
+Dead Reckoning Loop — TypeScript
+// Runs every 100ms via requestAnimationFrame
+const deadReckon = () => {
+  const { lat, lng, heading, speed } = useVehicleStore.getState();
+  const elapsed = 0.1; // 100ms in seconds
+  const dist    = (speed / 3.6) * elapsed; // speed in km/h → m/s
+  const newLat  = lat + (dist / 111320) * Math.cos(toRad(heading));
+  const newLng  = lng + (dist / 111320) * Math.sin(toRad(heading));
+  markerRef.current?.setLatLng([newLat, newLng]);
+  requestAnimationFrame(deadReckon);
+};
+// On real WS ping — divergence check
+const onPing = (real: Position) => {
+  const dist = haversine(interpolated, real);
+  if (dist <= 5) smoothCorrect(real);    // lerp over 500ms
+  else           snapTo(real);           // snap + expand circle
+};
+API Endpoints Used
+Method
+Endpoint
+When Called
+Response Used For
+WS
+`/ws/bus/{bus_id}`
+Page load — persistent
+All real-time map updates — state, position, tier, confidence_radius_m
+GET
+`/api/bus/{bus_id}`
+Page load — initial snapshot
+Set starting lat/lng before WS stream begins
+GET
+`/api/bus/{id}/position`
+Every 30s if WS dead
+Polling fallback — lat, lng, heading, ts
+GET
+`/api/bus/anomalies`
+Every 60s background poll
+Trigger ghost bus alert overlay if non-empty
+GET
+`/api/stops`
+Once on page load
+Render stop markers + route polyline on map
+GET
+`/api/eta/{stop_id}`
+On stop tap + every 30s
+ETA card — eta_min, eta_max, leave_now, confidence
+Database / Storage
+Store
+Key / Table
+TTL
+Read / Write
+Purpose
+Redis
+`bus:{id}:state`
+120s
+Read (via WS broadcast)
+Vehicle state — drives marker color and status bar
+Redis
+`bus:{id}:position`
+120s
+Read (initial snapshot)
+Starting lat/lng/heading before WS stream
+Redis
+`bus:{id}:meta`
+300s
+Read (via WS broadcast)
+rtt_ms, tier, confidence_radius_m, buffer_count
+Redis
+`channel:bus:{id}`
+N/A
+Subscribe
+Pub/sub broadcast — Fastify relays to all WS clients
+PG
+stops
+Perm
+Read once
+Stop coordinates + names for map overlay
+PG
+routes
+Perm
+Read once
+Route waypoints for polyline render
+Vehicle State → UI Mapping
+State
+Marker Color
+Confidence Circle
+Status Bar
+ETA Display
+ACTIVE
+Green (pulse glow)
+Hidden (radius 5m)
+None — clean UI
+"Arrives in 8 min"
+SPARSE
+Yellow
+Small amber ring
+"Signal weak — updates every 15s"
+Arrives in 7–10 min"
+LOST
+Orange
+Large orange ring
+"Signal lost — estimating position"
+"Arrives in 6–13 min (estimated)"
+BUFFERING
+Red (static)
+Large red ring
+"Signal lost — buffering updates"
+Usually arrives around 08:45"
+SYNCING
+Blue (pulse animation)
+Shrinking blue ring
+"Reconnected — syncing N updates"
+Returns to precise estimate
+Performance Considerations
+requestAnimationFrame runs at display refresh rate (60fps) but dead reckoning only updates position every 100ms — throttled with a timestamp check to avoid over-computation.
+Leaflet marker setLatLng() is called only when position delta exceeds 0.5m — prevents redundant DOM updates during very slow movement.
+Redis pub/sub broadcast is fire-and-forget — Fastify WS handler does not await acknowledgement from frontend, preventing head-of-line blocking across connected clients.
+Stop + route data is fetched once on load and cached in Zustand — never re-fetched during the session unless the user switches routes.
+2
+Stop-Centric View
+Core App Page
+Purpose & Scope
+The Stop-Centric View is IZUM's product reframe — instead of showing where the bus is, it answers the only question students actually care about: should I leave now? Each stop card shows an ETA range, a Leave Now / Wait recommendation, and a signal confidence indicator. No map, no complexity — pure decision support.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Typed stop cards, ETA polling, leave-now logic
+UI
+React
+18.3+
+StopList, StopCard, ETABadge, LeaveNowPill, ConfidenceRing, BottomNav
+HTTP
+Axios
+1.6+
+GET /api/eta/{stop_id} — polled every 30s per visible stop
+State
+Zustand
+4.5+
+selectedStop, etaMap (stopId→eta), walkTime preference
+Routing
+React Router v6
+6.23+
+Navigate to /stops/{stop_id}/detail on card tap
+Styling
+Tailwind CSS
+3.4+
+Card layout, Leave Now amber pulse, confidence ring colors
+Animation
+Framer Motion
+11+
+Staggered card slide-up on load, card expand on select, badge pulse
+Search
+Fuse.js
+7.0+
+Client-side fuzzy search over stop names
+Backend Stack
+Layer
+Technology
+Version
+Responsibility
+Framework
+Fastify
+4.27+
+GET /api/eta/{stop_id}, GET /api/stops
+ML Proxy
+Axios
+1.6+
+Forward ETA request to Python ML microservice
+Cache
+ioredis
+5.3+
+Cache ETA responses per stop per bus for 15s (reduces ML calls)
+Auth
+jose
+5.2+
+Verify Bearer token on every ETA request
+ORM
+Prisma
+5.14+
+Fetch all stops with route assignment
+Leave Now Logic
+// Client-side — runs on every ETA update
+const calcLeaveNow = (eta_min: number, walkTime: number): LeaveStatus => {
+  if (eta_min <= walkTime + 1) return "LEAVE_NOW";       // urgent
+  if (eta_min <= walkTime + 4) return "LEAVE_SOON";      // amber
+  return "WAIT";                                          // comfortable
+};
+// walkTime comes from user preference stored in Zustand
+// Default: 3 minutes (180 seconds)
+// User can adjust via settings slider
+API Endpoints Used
+Method
+Endpoint
+When Called
+Response Used For
+GET
+`/api/stops`
+Page load — once, cached
+Render all stop cards with names + routes
+GET
+`/api/eta/{stop_id}`
+On load + every 30s per stop
+eta_min, eta_max, confidence, leave_now badge
+GET
+`/api/eta/{stop_id}?walk_time=N`
+User adjusts walk time slider
+Updated leave_now recommendation
+GET
+`/auth/me`
+Page load (session restore)
+Personalised greeting, stored walk_time preference
+Database / Storage
+Store
+Key / Table
+TTL
+Purpose
+PostgreSQL
+stops
+Permanent
+stop_id, name, lat, lng, route_id, sequence — all stop cards
+PostgreSQL
+routes
+Permanent
+Route name shown on each card
+Redis
+bus:{id}:state
+120s
+Signal tier → confidence badge color (STRONG/WEAK/ESTIMATED)
+Redis
+eta:{stop_id}
+15s
+Cached ETA response — prevents hammering ML service every poll
+Confidence Badge Mapping
+Signal Tier
+Badge Label
+Badge Color
+Ring Style
+FULL
+Strong
+Green
+Full arc — solid green ring
+REDUCED
+Weak
+Amber
+75% arc — amber ring
+MINIMAL
+Estimated
+Orange
+40% arc — dashed orange ring
+DEAD
+Historical
+Red
+20% arc — dotted red ring, pulsing
+3
+ETA Detail Page
+Core App Page
+Purpose & Scope
+The ETA Detail Page gives the full picture for a single stop — the ML model's confidence range, all 8 input features exposed for transparency, a visual uncertainty bar that widens as signal degrades, and an honest fallback message when the model is operating on dead reckoning. It is both a student-facing tool and a judge-facing proof of the ML layer's depth.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Typed ETA detail response, uncertainty bar width calc, state transitions
+UI
+React
+18.3+
+ETADisplay, UncertaintyBar, SignalDots, ModelFeaturePanel, FallbackBanner
+HTTP
+Axios
+1.6+
+GET /api/eta/{stop_id}/detail — polled every 20s
+State
+Zustand
+4.5+
+etaDetail, signalTier, deadReckoning flag
+Styling
+Tailwind CSS
+3.4+
+Gradient background, confidence bar track + fill, signal dot states
+Animation
+Framer Motion
+11+
+ETA number blur-morph, uncertainty bar width transition, banner slide-down
+Backend Stack (Python ML Microservice)
+This page's primary endpoint is served by the Python FastAPI ML microservice, not the Node.js Fastify server. The Fastify server proxies the request and forwards the response.
+Layer
+Technology
+Version
+Responsibility
+Framework
+FastAPI (Python)
+0.111+
+GET /eta/{stop_id}/detail — assemble features, call model, build response
+ML Model
+Scikit-learn RF
+1.4+
+RandomForestRegressor — loaded in memory, inference <5ms
+Dead Reckoning
+Python math
+stdlib
+Project position from last known speed + heading when gap > 90s
+Redis
+redis-py
+5+
+Read bus:state, bus:position, bus:meta for feature vector
+Historical Avg
+PostgreSQL
+16
+Query avg arrival times by stop + hour + day for fallback ETA
+API Endpoint Response
+// GET /api/eta/{stop_id}/detail — Full response
+{
+  stop_id:    "stop_main_gate",
+  eta_min:    7,   eta_max: 10,   confidence: "MEDIUM",
+  model_features: {
+    stops_remaining:   3,      current_speed:    28.4,
+    time_of_day:       9.25,   day_of_week:      1,
+    signal_tier:       1,      ping_gap_seconds: 22,
+    buffer_queue_size: 0,      rtt_ms:           210
+  },
+  dead_reckoning:          false,
+  historical_avg_arrival:  "08:45",
+  last_ping_age_s:         22,
+  uncertainty_bar_pct:     35    // 0=narrow (precise) → 100=wide (uncertain)
+}
+Uncertainty Bar Calculation
+// Python — FastAPI ML service
+base_width     = 2.0  # minutes — minimum range at perfect signal
+signal_factor  = 1 + (signal_tier * 0.5)        # tier 0→1x, tier 3→2.5x
+staleness_factor = 1 + (ping_gap_seconds / 90)  # grows linearly
+confidence_width = base_width * signal_factor * staleness_factor
+eta_min = max(0, base_eta_minutes - confidence_width / 2)
+eta_max = base_eta_minutes + confidence_width / 2
+# uncertainty_bar_pct — for frontend visual
+uncertainty_bar_pct = min(100, int((confidence_width / 15) * 100))
+API Endpoints Used
+Method
+Endpoint
+When Called
+Response Used For
+GET
+`/api/eta/{stop_id}/detail`
+Page load + every 20s
+All ETA data: range, features, dead_reckoning, uncertainty_bar_pct
+GET
+`/api/bus/{bus_id}`
+Page load
+last_ping_age_s for "Last updated" timestamp
+GET
+`/api/stops`
+Page load (cached)
+Stop name + route name for page header
+Database / Storage
+Store
+Key / Table
+TTL
+Purpose
+Redis
+bus:{id}:state
+120s
+signal_tier, ping_gap_seconds — primary ETA model inputs
+Redis
+bus:{id}:position
+120s
+current_speed, lat, lng — velocity + location features
+Redis
+bus:{id}:meta
+300s
+rtt_ms, buffer_count, last_ping_ts
+PostgreSQL
+stops
+Permanent
+Stop name, route name — header display
+PostgreSQL
+historical_arrivals (view)
+Permanent
+AVG arrival time by stop_id + hour + day_of_week — fallback ETA
+ETA Display State Machine
+Signal State
+ETA Display
+Uncertainty Bar
+Fallback Banner
+FULL + ping < 10s
+"Arrives in 8 min"
+10% width — narrow green fill
+Hidden
+REDUCED + ping < 30s
+"Arrives in 7–10 min"
+35% width — amber fill
+Hidden
+MINIMAL + ping < 90s
+"Arrives in 6–13 min (est.)"
+65% width — orange fill, dashed
+Hidden
+LOST / gap > 90s
+"Arrives in 5–15 min (est.)"
+85% width — red fill, animated
+Slides down: "Usually arrives around 08:45"
+4
+Honest Status Bar Overlay
+Status/System Page
+Purpose & Scope
+The Status Bar is a zero-backend overlay component that rides on the existing WebSocket stream. It surfaces system state honestly — network degradation, buffer count, ghost bus flags — through carefully designed text and animation that never alarms unnecessarily. No dedicated API calls. No extra DB reads. Pure frontend state machine.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Typed state enum, message map, animation triggers
+UI
+React
+18.3+
+StatusBar component — conditionally rendered above ETA card
+State
+Zustand
+4.5+
+vehicleState, bufferCount, ghostBusActive — read from WS message handler
+Animation
+Framer Motion
+11+
+AnimatePresence for mount/unmount, layout animation for height
+Styling
+Tailwind CSS
+3.4+
+Frosted glass, colored left border accent per state, text slide
+WebSocket
+Shared WS
+N/A
+Reads from same WS connection opened by Page 1 — no new connection
+State → Message → Style Mapping
+vehicleState
+Bar Text
+Left Border
+Background
+Right Icon
+ACTIVE
+Hidden — no bar rendered
+N/A
+N/A
+N/A
+SPARSE
+"Signal weak — updates every 15s"
+Amber
+Frosted amber (opacity 0.85)
+Slow pulse dot
+LOST
+"Signal lost — estimating position"
+Orange
+Frosted orange (opacity 0.9)
+Spinning loader
+BUFFERING
+"Signal lost — buffering updates"
+Red
+Frosted red (opacity 0.9)
+Spinning loader + count
+SYNCING
+"Reconnected — syncing {bufferCount} updates"
+Blue
+Frosted blue (opacity 0.85)
+Progress sweep L→R
+GHOST_BUS
+"Bus 2 may be inactive — verifying"
+Orange
+Frosted orange
+Ghost icon fade loop
+Animation Spec
+API Endpoints Used
+Method
+Endpoint
+When Called
+Purpose
+WS
+`/ws/bus/{bus_id}`
+Persistent (shared with Page 1)
+Read .state + .buffer_count on every message — no dedicated call
+GET
+`/api/bus/anomalies`
+Every 60s background poll
+Ghost bus flag — if anomalies.length > 0, activate GHOST_BUS bar
+This component has zero dedicated backend surface. It is entirely driven by the WS message stream already open on the map page. The ghost bus poll is the only additional HTTP call — and it is shared with Page 6 (Ghost Bus Alert).
+5
+Network Mode Toggle Panel
+Status/System Page
+Purpose & Scope
+The Network Toggle Panel is the demo control centre — the tool judges use to simulate network degradation live. It is protected behind admin/demo role and shows real-time stats as the mode changes. Tapping a card fires a POST to the Python simulator service which reconfigures its RTT target, payload tier, and ping interval immediately.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Typed mode enum, stats polling, counter animation
+UI
+React
+18.3+
+TogglePanel, ModeCard, LiveStatsBar, SignalGraph components
+HTTP
+Axios
+1.6+
+POST /api/simulator/network-mode, GET /api/bus/{id} every 2s
+State
+Zustand
+4.5+
+activeMode, liveStats (payload_bytes, interval_s, buffer_count)
+Animation
+Framer Motion
+11+
+Card ripple on tap, glow pulse on active, number count-up on stats change
+Styling
+Tailwind CSS
+3.4+
+Dark panel, colored card borders, animated gradient background on active card
+Auth Guard
+React Router
+6.23+
+Route guard — redirect to /map if role !== admin|demo
+Backend Stack
+Layer
+Technology
+Version
+Responsibility
+Framework
+Fastify (Node)
+4.27+
+POST /api/simulator/network-mode — validate + forward to Python simulator
+Auth
+jose
+5.2+
+Verify Bearer token, check role claim = "admin" or "demo"
+Simulator
+FastAPI (Python)
+0.111+
+Receive mode change, adjust RTT target, payload size, ping interval
+Redis
+ioredis (Node)
+5.3+
+Read bus:{id}:meta every 2s for live stats — no compute needed
+Mode Card Spec
+Mode
+RTT Target
+Payload
+Interval
+Card Color
+Active Glow
+Full Signal
+<100ms
+12 bytes
+5s
+Green
+Emerald pulse ring
+Reduced Signal
+200ms
+12 bytes
+15s
+Amber
+Amber pulse ring
+Minimal Signal
+500ms
+8 bytes
+30s
+Orange
+Orange pulse ring
+Signal Dead
+>800ms
+3 bytes
+Buffer
+Red
+Red pulse ring + static noise
+API Endpoints Used
+Method
+Endpoint
+When Called
+Response Used For
+POST
+`/api/simulator/network-mode`
+Mode card tap
+{ mode, interval_s, payload_bytes } — update active card highlight
+GET
+`/api/simulator/network-mode`
+Page load (show current)
+{ current_mode, interval_s, payload_bytes, buffer_count }
+POST
+`/api/simulator/reset`
+"Reset" button tap
+Resets route + mode — returns 200 OK
+GET
+`/api/bus/{bus_id}`
+Every 2s live stats poll
+{ rtt_ms, tier, buffer_count } for animated counter display
+Database / Storage
+Store
+Key
+TTL
+Purpose
+Redis
+bus:{id}:meta
+300s
+rtt_ms, tier, buffer_count — read every 2s for live stats counters
+Redis
+bus:{id}:buffer
+None
+ZSET size — buffer queue count shown in "Buffer Queue" counter
+Redis
+bus:{id}:state
+120s
+Current state — shown as WebSocket status indicator dot
+Live Stats Counter Animation
+6
+Ghost Bus Alert Screen
+Status/System Page
+Purpose & Scope
+The Ghost Bus Alert detects buses that have been stationary for 15+ minutes with zero speed variation — a sign the bus is not running. A background task on the Node.js server scans Redis state periodically, flags anomalies, and the frontend polls for them. When detected, a modal rises from the bottom with a 60-second auto-dismiss and a "Report to Admin" button that writes to PostgreSQL.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Typed anomaly interface, 60s countdown timer, auto-dismiss logic
+UI
+React
+18.3+
+GhostBusModal, CountdownRing, GhostMarkerBanner, ReportButton
+HTTP
+Axios
+1.6+
+GET /api/bus/anomalies every 60s, POST /api/bus/{id}/report
+State
+Zustand
+4.5+
+anomalies[], dismissedIds[] (persist dismissed so modal doesn't reappear)
+Animation
+Framer Motion
+11+
+Modal bounce-in from bottom, ghost float loop, countdown SVG ring drain
+Styling
+Tailwind CSS
+3.4+
+Dark backdrop, frosted modal card, SVG countdown ring
+Backend Stack
+Layer
+Technology
+Version
+Responsibility
+Framework
+Fastify (Node)
+4.27+
+GET /api/bus/anomalies, POST /api/bus/{id}/report
+BG Scanner
+Node setInterval
+built-in
+Every 60s: scan all bus:{id}:state keys in Redis for ghost conditions
+Redis
+ioredis
+5.3+
+Read bus position + speed history to detect zero-speed pattern
+ORM
+Prisma
+5.14+
+INSERT anomaly_log + student reports to PostgreSQL
+Auth
+jose
+5.2+
+Bearer token required for POST /report — get student_id from JWT
+Ghost Bus Detection Logic
+API Endpoints Used
+Method
+Endpoint
+When Called
+Response Used For
+GET
+`/api/bus/anomalies`
+Every 60s poll
+[ { bus_id, type, stationary_minutes, flagged_at } ] — triggers modal
+POST
+`/api/bus/{bus_id}/report`
+"Report to Admin" tap
+{ report_id, status: "under_review" } — show confirmation toast
+GET
+`/api/bus/{bus_id}`
+On modal open
+last_ping_ts, route name — shown in modal body text
+Database / Storage
+Store
+Key / Table
+TTL / Retention
+Purpose
+Redis
+bus:{id}:position
+120s
+speed field — primary ghost detection input
+Redis
+bus:{id}:meta
+300s
+stationary_minutes counter — incremented by simulator
+PostgreSQL
+anomaly_log
+Permanent
+bus_id, type=GHOST_BUS, detected_at, stationary_minutes, resolved_at
+PostgreSQL
+anomaly_reports
+Permanent
+report_id, bus_id, student_id, reason, created_at
+Countdown Ring — SVG Animation
+7
+Silent SOS Trigger
+Safety Page
+Purpose & Scope
+The Silent SOS is designed for one scenario: a student on a bus who feels unsafe but cannot visibly call for help. Three rapid taps on a near-invisible shield icon triggers a 10-second cancel window, then silently POSTs GPS location and bus ID to campus security. No red SOS text. No alarm sound. No visible response to a bystander.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Tap counting logic, 10s cancel timer, vibration, POST with location
+UI
+React
+18.3+
+ShieldIcon (tiny, subtle), CancelBar, ConfirmationToast components
+Vibration
+navigator.vibrate()
+Web API
+Silent haptic feedback on trigger — mobile only
+Geolocation
+navigator.geolocation
+Web API
+Get current lat/lng at moment of trigger — fallback to bus position
+HTTP
+Axios
+1.6+
+POST /api/sos after 10s window, only if not cancelled
+State
+Zustand
+4.5+
+tapTimestamps[], cancelActive, sosDispatched
+Animation
+Framer Motion
+11+
+Screen flash (100ms), cancel bar drain, toast slide-up, cancel retract
+Styling
+Tailwind CSS
+3.4+
+Shield opacity-20 (nearly invisible), cancel bar thin red strip at top
+Backend Stack
+Layer
+Technology
+Version
+Responsibility
+Framework
+Fastify (Node)
+4.27+
+POST /api/sos — validate, log, dispatch alert
+Auth
+jose
+5.2+
+Extract student_id from JWT sub claim server-side — never from body
+ORM
+Prisma
+5.14+
+INSERT sos_events row — student_id hash, bus_id, lat, lng, ts, status
+Alert
+Resend (email)
+3.2+
+Send security alert email within 2s of SOS receipt
+Rate Limit
+fastify-rate-limit
+9.1+
+Max 3 SOS/student/hour — prevent accidental spam
+Tap Detection Logic
+API Endpoints Used
+Method
+Endpoint
+When Called
+Response Used For
+POST
+`/api/sos`
+After 10s cancel window, if not cancelled
+{ sos_id, status: "dispatched" } — log internally, show "Help on way" toast
+GET
+`/api/bus/{bus_id}`
+At moment of trigger — get real-time pos
+lat, lng embedded in SOS payload (fallback to geolocation API)
+Database / Storage
+Store
+Key / Table
+TTL
+Purpose
+PostgreSQL
+sos_events
+Permanent
+sos_id, student_id_hash, bus_id, lat, lng, ts, status, cancelled
+Redis
+bus:{id}:position
+120s
+Fallback lat/lng if geolocation API is unavailable or denied
+Privacy & Security Design
+8
+Virtual Escort Share Page
+Safety Page
+Purpose & Scope
+The Virtual Escort page lets a parent or warden track a student's bus journey live from a browser — no app install, no login. The student generates a token-based URL that expires in 2 hours. The escort page polls position every 15 seconds and displays a read-only map with a blue bus marker, route progress bar, and a "Journey Complete" state on arrival.
+Frontend Stack (Student — Link Generator)
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Typed escort token response, share sheet integration
+UI
+React
+18.3+
+ShareJourneyButton, EscortLinkModal, DestinationPicker
+HTTP
+Axios
+1.6+
+GET /api/escort/generate — returns token + URL
+Share API
+navigator.share()
+Web API
+Native share sheet on mobile — share URL to WhatsApp/SMS directly
+Auth
+Zustand (token)
+4.5+
+Bearer token required to generate link
+Frontend Stack (Parent — Escort Viewer)
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Token extraction from URL, 15s polling loop, journey complete detection
+UI
+React
+18.3+
+EscortMap, RouteProgressBar, JourneyTimer, JourneyCompleteScreen
+Map
+React Leaflet
+4.2+
+Read-only map — blue bus marker, route polyline, stop markers
+HTTP
+Axios
+1.6+
+GET /api/escort/{token}/position every 15s
+Animation
+Framer Motion
+11+
+Banner slide-down, progress dot glow, journey complete fade transition
+Auth
+None
+N/A
+Token in URL path is the only auth — no login required
+Backend Stack
+Layer
+Technology
+Version
+Responsibility
+Framework
+Fastify (Node)
+4.27+
+GET /api/escort/generate, GET /api/escort/{token}/position
+Token Gen
+crypto.randomBytes
+Node stdlib
+Generate 16-byte hex token — unguessable, URL-safe
+JWT
+jose
+5.2+
+Extract student_id from Bearer token for generate endpoint
+ORM
+Prisma
+5.14+
+INSERT escort_tokens, SELECT + validate on position endpoint
+Redis
+ioredis
+5.3+
+Read bus:{id}:position for lat/lng relay to escort viewer
+API Endpoints Used
+Method
+Endpoint
+Auth
+Response
+GET
+`/api/escort/generate?bus_id=&destination=`
+Bearer token
+{ token, url, expires_at, destination_stop }
+GET
+`/api/escort/{token}/position`
+Token in URL
+{ lat, lng, current_stop, eta_min, eta_max, journey_complete }
+GET
+`/api/stops`
+None (cached)
+Stop list for route progress bar render
+Database / Storage
+Store
+Key / Table
+TTL / Retention
+Purpose
+PostgreSQL
+escort_tokens
+2 hours (expires_at column)
+token, student_id, bus_id, destination_stop_id, expires_at, used
+Redis
+bus:{id}:position
+120s
+Real-time lat/lng relayed to escort viewer on each 15s poll
+Redis
+bus:{id}:state
+120s
+If LOST/BUFFERING, escort viewer shows "Signal weak" notice
+PostgreSQL
+stops
+Permanent
+Stop names + sequence for route progress bar
+Journey Complete Detection
+9
+Late Night Mode View
+Safety Page
+Purpose & Scope
+Late Night Mode activates automatically after 21:00. It overlays a deeper dark theme with blue-purple tint on the main map, adds a driver check-in countdown ring that depletes every 10 minutes, and monitors route deviation. A missed check-in fires a security alert immediately. Route deviation beyond 100m triggers a map highlight showing expected vs actual path.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Time-based activation, countdown ring state, deviation highlight logic
+UI
+React
+18.3+
+LateNightOverlay, CheckinRing, OverdueAlert, DeviationHighlight
+Map
+React Leaflet
+4.2+
+Add expected route polyline (blue) + actual path (red) on deviation
+HTTP
+Axios
+1.6+
+GET /api/bus/{id}/checkin-status every 60s, GET /api/bus/{id}/deviation
+State
+Zustand
+4.5+
+lateNightActive, checkInStatus, deviationDetected
+Animation
+Framer Motion
+11+
+Moon banner slide-down, ring depletion (SVG strokeDashoffset), overdue shake + glow, deviation badge animate-in
+Styling
+Tailwind CSS
+3.4+
+Deep dark overlay (bg-slate-950), blue-purple tint, red ring on overdue
+Backend Stack
+Layer
+Technology
+Version
+Responsibility
+Framework
+Fastify (Node)
+4.27+
+GET /api/bus/{id}/checkin-status, POST /api/bus/{id}/checkin, GET /api/bus/{id}/deviation
+Scheduler
+Node setInterval
+built-in
+Every 60s: check if driver check-in was received within window
+Auth
+jose
+5.2+
+POST /checkin requires valid driver JWT — reject student tokens
+ORM
+Prisma
+5.14+
+INSERT driver_checkins, SELECT route waypoints for deviation calc
+Alert
+Resend
+3.2+
+Email campus security on missed check-in or deviation > 100m
+Redis
+ioredis
+5.3+
+Read/write latenight:{bus_id} hash — last_checkin_ts, overdue flag
+Late Night Activation Logic
+Route Deviation Detection
+API Endpoints Used
+Method
+Endpoint
+When Called
+Response Used For
+GET
+`/api/bus/{bus_id}/checkin-status`
+Every 60s when LN mode active
+{ last_checkin_ago_s, next_due_in_s, overdue, security_alerted }
+POST
+`/api/bus/{bus_id}/checkin`
+Driver taps check-in (driver view)
+{ checkin_recorded_at, next_due_in_s } — reset ring
+GET
+`/api/bus/{bus_id}/deviation`
+Every 60s alongside checkin-status
+{ deviated, deviation_meters, expected_lat/lng, actual_lat/lng }
+Database / Storage
+Store
+Key / Table
+TTL
+Purpose
+PostgreSQL
+driver_checkins
+Permanent
+Full audit trail — driver_id, bus_id, ts, late_night_mode=true
+PostgreSQL
+routes
+Permanent
+Route waypoints — used to calculate expected bus position at any timestamp
+Redis
+latenight:{bus_id}
+600s
+last_checkin_ts, overdue(bool), deviation_detected — fast UI reads
+Redis
+bus:{id}:position
+120s
+Actual lat/lng — compared against expected route for deviation calc
+Check-in Ring States
+Time Since Last Check-in
+Ring Color
+Ring Fill %
+UI Behaviour
+0–6 min
+Green
+100% → 40%
+Smooth depletion, no urgency
+6–9 min
+Amber
+40% → 10%
+Ring turns amber, text "Check-in due soon"
+9–10 min
+Red
+10% → 0%
+Rapid pulse animation, "Check-in overdue" warning
+> 10 min
+Red
+0%
+Ring stops, pulses rapidly, security alert fired, shake animation
+10
+Landing / Home Page
+Docs Site Page
+Purpose & Scope
+The ThinkRoot landing page is IZUM's public face — a product launch site, not a README. It must convince judges in 30 seconds that IZUM solves a real problem with real technical depth. Every section is scroll-triggered, the hero animates on load, and the feature cards communicate the three core differentiators visually.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Hero animation sequencer, scroll observer, typewriter, map preview logic
+UI
+React
+18.3+
+HeroSection, FeatureCards, HumanStory, CTAButtons, ParticleBackground
+Build
+Vite
+5.2+
+Static site output — single HTML file, optimised CSS/JS bundles
+Scroll Anim
+Framer Motion
+11+
+whileInView triggers — slide-in story, flip-in cards, fade-in stats
+Typewriter
+Custom hook
+N/A
+Character-by-character tagline reveal — pure CSS animation fallback
+Map Preview
+React Leaflet
+4.2+
+Miniature looping demo map in hero — animated marker, state changes
+Particle BG
+tsParticles (lite)
+3.3+
+Subtle animated particle field in hero — <10KB, tree-shaken
+Styling
+Tailwind CSS
+3.4+
+Dark theme (#0a0a0f), neon green accents, frosted glass cards
+Hosting
+Netlify / Vercel
+N/A
+Static deploy from Vite dist/ — no server required
+Sections & Content
+Section
+Animation
+Content
+Purpose
+Hero
+Letter fade-in + typewriter + map preview loop
+"IZUM — A resilience-first campus mobility platform"
+Immediate product identity
+Human Story
+Slide-in from left on scroll
+One paragraph: student missing bus in rain on college WiFi
+Emotional hook for judges
+Feature Cards
+3 cards flip up staggered on scroll
+94% payload reduction / Dead reckoning / Honest ETA
+Technical differentiators
+Stats Bar
+Count-up animation on scroll into view
+94% reduction / 100ms interpolation / 8 signal features
+Proof of depth
+Live Demo CTA
+Pulse glow animation, color shift on hover
+"Try the live demo" → Railway URL
+Judge engagement
+Docs Links
+Fade-in on scroll
+Architecture / API Reference / Tech Stack links
+Judge deep-dive path
+Hero Map Preview — Animation Loop
+API Endpoints Used
+Method
+Endpoint
+When Called
+Purpose
+GET
+/health
+Page load — once, silent
+Check live demo reachability — show/hide "Live Demo" button based on result
+Performance Budget
+Asset
+Target Size
+Technique
+Total JS bundle
+<120KB gzipped
+Vite tree-shaking, tsParticles lite variant, dynamic imports for Leaflet
+CSS bundle
+<15KB
+Tailwind purge — only used utility classes included
+LCP (hero image)
+<1.2s
+No hero image — pure CSS/JS animation, no file to load
+Particle background
+<10KB JS
+tsParticles lite — not the full 200KB build
+Map preview
+Lazy-loaded
+React.lazy() — Leaflet loads only after hero text is visible
+11
+Architecture Diagram Page
+Docs Site Page
+Purpose & Scope
+The Architecture page is where judges go to verify technical depth. It shows the full system flow with animated data-flow dots, the vehicle state machine with colour-coded states, and a section-by-section explanation of every technology choice. Everything is scroll-triggered and hover-interactive — it feels like a real engineering blog post, not a hackathon submission.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+SVG animation control, hover tooltip logic, scroll observer
+UI
+React
+18.3+
+SystemDiagram, StateMachineViz, ComponentExplainer, DockerStack sections
+SVG Diagrams
+Inline SVG + CSS
+N/A
+System flow diagram — nodes, connectors, animated data-flow dots
+Dot Animation
+CSS stroke-dashoffset
+N/A
+Dots moving along SVG paths — pure CSS, no JS animation library needed
+Hover Tooltips
+Floating UI
+2.3+
+Positioned tooltips on SVG node hover — explains each component
+Scroll Reveal
+Framer Motion
+11+
+whileInView — each section reveals on scroll
+State Machine
+D3.js (minimal)
+7.9+
+State transition arcs — force-directed layout for 5 state nodes
+Styling
+Tailwind CSS
+3.4+
+Dark bg, monospace labels, green accent connectors
+Hosting
+Netlify / Vercel
+N/A
+Static — served from Vite dist/
+Diagram Sections
+Section
+Visual Type
+Content
+Interactive Behaviour
+System Flow
+SVG node graph + animated dots
+GPS Sim → Fastify → Redis → ML → Leaflet
+Hover node → tooltip with tech choice rationale
+Vehicle State Machine
+D3 arc diagram — 5 nodes
+ACTIVE/SPARSE/LOST/BUFFERING/SYNCING
+Click state → highlight all transitions, show trigger condition
+Payload Compression
+Animated bar comparison
+340 bytes naive vs 8 bytes IZUM
+Bar animates to final width on scroll into view
+Docker-free Deploy
+Stack diagram (CSS divs)
+Fastify / Python / Redis / PG / Nginx
+Hover service → show port + health check
+Tech Choice Cards
+3-column card grid
+Why Fastify / Why Redis / Why Prisma
+Expand on click — show code example inline
+SVG Data-Flow Dot Animation
+API Endpoints Used
+Method
+Endpoint
+When Called
+Purpose
+None
+N/A
+Page is fully static — no API calls
+All diagrams rendered client-side from hardcoded data
+12
+Payload & API Docs Page
+Docs Site Page
+Purpose & Scope
+The Payload & API Docs page is the technical reference — payload comparison, network tier table, ML feature set, and a full endpoint accordion. It is designed for judges who want to verify the implementation details claimed in the brief. Every code block has a copy button. Every table row highlights on scroll. The accordion gives judges instant access to any endpoint's request/response shape.
+Frontend Stack
+Layer
+Technology
+Version
+Responsibility
+Language
+TypeScript
+5.4+
+Accordion state, row highlight timing, copy-to-clipboard
+UI
+React
+18.3+
+PayloadComparison, TierTable, MLFeatureTable, EndpointAccordion, CodeBlock
+Clipboard
+navigator.clipboard
+Web API
+Copy button on all code blocks — async write with visual feedback
+Scroll Reveal
+Framer Motion
+11+
+Table rows fade + slide in one-by-one on scroll into view
+Accordion
+Custom React
+N/A
+AnimatePresence height animation — each endpoint expands/collapses
+Syntax HL
+Shiki (static)
+1.6+
+Server-side syntax highlighting at build time — zero runtime JS
+Styling
+Tailwind CSS
+3.4+
+Dark code blocks, green endpoint badges, monospace font
+Hosting
+Netlify / Vercel
+N/A
+Static — Vite output
+Payload Comparison Animation
+Endpoint Accordion Content
+Endpoint
+Method
+Accordion Shows
+/ws/bus/{bus_id}
+WS
+Connection protocol, inbound/outbound message schemas, 5 vehicle states
+/auth/register
+POST
+Zod schema, bcrypt cost, JWT pair response, 409 duplicate handling
+/auth/login
+POST
+Credential check flow, httpOnly cookie strategy, role routing
+/api/eta/{stop_id}
+GET
+8-feature ML vector, confidence_width formula, 4 display modes
+/api/eta/{stop_id}/detail
+GET
+Full model_features object, dead_reckoning flag, uncertainty_bar_pct
+/api/simulator/network-mode
+POST
+4 modes, RTT targets, payload sizes, interval changes
+/api/sos
+POST
+Privacy design, student_id hashing, 10s cancel, dispatch flow
+/api/escort/{token}/position
+GET
+Token validation, position relay, journey_complete detection
+/api/bus/anomalies
+GET
+Ghost bus detection logic, stationary_minutes threshold
+/api/bus/{id}/checkin-status
+GET
+Late night mode trigger, overdue logic, security alert
+API Endpoints Used
+Method
+Endpoint
+When Called
+Purpose
+None
+N/A
+Fully static page — all content hardcoded from documentation
+No live API calls — works even when backend is offline
+Master Summary — All 14 Pages
+Complete Stack per Page
+#
+Page
+Frontend
+Backend
+Database
+Auth Required
+R1
+Registration
+React+TS, RHF, Zod, Framer
+Fastify, Prisma, bcrypt, jose
+PostgreSQL (users, students, drivers)
+No (public)
+R2
+Login
+React+TS, RHF, Axios, Zustand
+Fastify, Prisma, bcrypt, jose
+PostgreSQL + Redis (sessions)
+No (public)
+1
+Live Map
+React+TS, React Leaflet, rAF
+Fastify WS + Python FastAPI ML
+Redis (state/pos/meta) + PG (stops)
+Yes — student
+2
+Stop-Centric
+React+TS, Axios, Fuse.js
+Fastify, Python ML proxy
+PG (stops/routes) + Redis (eta cache)
+Yes — student
+3
+ETA Detail
+React+TS, Framer Motion
+Python FastAPI ML service
+Redis + PG (historical avg view)
+Yes — student
+4
+Status Bar
+React+TS, Framer Motion
+None (WS stream only)
+Redis (via WS message)
+Yes — student
+5
+Network Toggle
+React+TS, Framer Motion
+Fastify + Python simulator
+Redis (meta/buffer)
+Yes — admin
+6
+Ghost Bus Alert
+React+TS, SVG countdown
+Fastify + Node BG scanner
+Redis + PG (anomaly_log)
+Yes — student
+7
+Silent SOS
+React+TS, Vibration API
+Fastify, Prisma, Resend
+PG (sos_events)
+Yes — student
+8
+Virtual Escort
+React+TS, React Leaflet
+Fastify, Prisma, crypto
+PG (escort_tokens) + Redis (position)
+Token only
+9
+Late Night Mode
+React+TS, SVG ring, D3
+Fastify, Prisma, Resend, setInterval
+PG (checkins/routes) + Redis (LN hash)
+Yes — driver+student
+10
+Landing Page
+React+TS, tsParticles, Framer
+None (static)
+None
+No (public)
+11
+Architecture Docs
+React+TS, SVG, D3, Floating UI
+None (static)
+None
+No (public)
+12
+Payload & API Docs
+React+TS, Shiki, Framer
+None (static)
+None
+No (public)
+Package Count
+Scope
+Packages
+Key Libraries
+Frontend (shared)
+12 packages
+React, TypeScript, Vite, Tailwind, Framer Motion, Zustand, Axios, React Router, React Leaflet, React Hook Form, Zod, react-hot-toast
+Frontend (selective)
+5 packages
+Fuse.js (Page 2), tsParticles (Page 10), Floating UI (Page 11), D3 (Pages 9+11), Shiki (Page 12)
+Backend Node.js
+10 packages
+Fastify, @fastify/websocket, fastify-rate-limit, fastify-cookie, Prisma, ioredis, jose, bcrypt, Resend, Axios
+Backend Python
+6 packages
+FastAPI, Uvicorn, scikit-learn, joblib, redis-py, Pydantic v2
+Infrastructure
+3 services
+PostgreSQL 16, Redis 7, TimescaleDB extension
+API Endpoint Master List
+Method
+Endpoint
+Service
+Pages That Use It
+WS
+/ws/bus/{bus_id}
+Fastify (Node)
+1, 4
+POST
+/auth/register
+Fastify (Node)
+R1
+GET
+/auth/check-email
+Fastify (Node)
+R1
+POST
+/auth/login
+Fastify (Node)
+R2
+POST
+/auth/refresh
+Fastify (Node)
+R2, all protected pages
+POST
+/auth/logout
+Fastify (Node)
+R2
+GET
+/auth/me
+Fastify (Node)
+R2, 1, 2
+GET
+/api/bus/{bus_id}
+Fastify (Node)
+1, 5, 6, 7
+GET
+/api/bus/{bus_id}/position
+Fastify (Node)
+1 (WS fallback), 8
+GET
+/api/bus/anomalies
+Fastify (Node)
+4, 6
+GET
+/api/bus/{bus_id}/deviation
+Fastify (Node)
+9
+POST
+/api/bus/{bus_id}/report
+Fastify (Node)
+6
+POST
+/api/bus/{bus_id}/checkin
+Fastify (Node)
+9
+GET
+/api/bus/{bus_id}/checkin-status
+Fastify (Node)
+9
+GET
+/api/stops
+Fastify (Node)
+1, 2, 8
+GET
+/api/eta/{stop_id}
+Fastify → Python
+1, 2
+GET
+/api/eta/{stop_id}/detail
+Fastify → Python
+3
+POST
+/api/simulator/network-mode
+Fastify → Python
+5
+GET
+/api/simulator/network-mode
+Fastify → Python
+5
+POST
+/api/simulator/reset
+Fastify → Python
+5
+POST
+/api/sos
+Fastify (Node)
+7
+GET
+/api/escort/generate
+Fastify (Node)
+8
+GET
+/api/escort/{token}/position
+Fastify (Node)
+8
+GET
+/api/fleet
+Fastify (Node)
+Admin dashboard
+GET
+/health
+Fastify (Node)
+10 (optional)
+Database Master
+Store
+Tables / Keys
+Purpose Summary
+PostgreSQL
+users, students, drivers, admins
+User accounts + role profiles
+PostgreSQL
+buses, routes, stops
+Fleet registration, campus route waypoints, stop coordinates
+PostgreSQL
+sos_events, escort_tokens
+Safety event log, shareable escort links with expiry
+PostgreSQL
+driver_checkins, anomaly_log
+Late night audit trail, ghost bus + deviation event log
+PostgreSQL
+refresh_tokens
+JWT refresh token store for rotation and revocation
+Redis
+bus:{id}:state/position/meta
+Real-time vehicle state — expires via TTL to drive state transitions
+Redis
+bus:{id}:buffer
+ZSET GPS event buffer during DEAD mode — priority flush on reconnect
+Redis
+session:{jti} / refresh:{jti}
+JWT session tracking — DEL on logout for instant revocation
+Redis
+channel:bus:{id}
+Pub/sub broadcast channel — Fastify fans out WS messages
+Redis
+latenight:{bus_id}
+Late night mode state — fast read for UI without PG query
+Redis
+eta:{stop_id}
+15s ETA response cache — prevents ML service saturation
+IZUM  |  Detailed Page Documentation Vol. 3 of 3  |  Production  |  ThinkRoot × Vortex Hackathon 2026
+
+=== PHASES ===
+IZUM
+Campus Mobility Platform
+System Architecture & Build Phases
+Full-Stack  |  TypeScript + Python  |  ThinkRoot × Vortex Hackathon 2026
+Resilience-First · Dead Reckoning · ML-Powered ETA · Safety-First Design
+1. System Architecture Overview
+IZUM is a resilience-first campus bus tracking platform built on a TypeScript + Python full-stack. The architecture is designed around three core principles: GPS dead reckoning for continuous position interpolation, an ML-powered ETA model using 8 signal-aware features, and an honest status system that communicates network degradation without alarming users.
+1.1 High-Level Component Map
+The system comprises five distinct layers communicating via WebSocket streams, REST APIs, Redis pub/sub, and PostgreSQL persistence.
+Layer
+Component
+Technology
+Role
+Simulation
+GPS Simulator
+Python · FastAPI · Uvicorn
+Emits position deltas (dlat, dlng, dhdg, speed) with configurable network tiers
+API Gateway
+Fastify Server
+Node.js 20 · Fastify 4.27 · TypeScript 5.4
+Auth, WebSocket relay, REST endpoints, background jobs, ML proxy
+ML Service
+ETA Microservice
+Python · FastAPI · scikit-learn RF · Joblib
+8-feature RandomForestRegressor, dead reckoning projection, uncertainty calc
+Storage
+Redis 7  +  PostgreSQL 16
+ioredis · redis-py · Prisma ORM
+Real-time bus state (TTL), pub/sub broadcast, persistent user/fleet/safety data
+Frontend
+React SPA (4 client types)
+React 18 · TypeScript · Vite · Zustand · Tailwind
+Student, Driver, Admin apps + Static Docs site
+1.2 Data Flow — End to End
+The following describes the complete path from GPS hardware to a student seeing a live bus marker:
+Step
+Actor
+Action
+Technology
+1
+GPS Simulator
+Emits dlat, dlng, dhdg, speed, tier every 5–30s (configurable)
+Python FastAPI → POST /ws handler
+2
+Fastify WS Handler
+Receives ping, validates JWT, writes bus:{id}:state/position/meta to Redis with TTL
+ioredis SET EX — 120s TTL drives state machine
+3
+Redis Pub/Sub
+Publishes enriched message on channel:bus:{id}
+PUBLISH — all WS subscriber instances receive it
+4
+Fastify WS Relay
+Fans out message to all connected frontend WebSocket clients for that bus
+broadcast() — fire and forget, no ACK wait
+5
+React Frontend
+Receives message, updates Zustand store — vehicleState, lat, lng, tier, confidenceRadius
+onmessage handler → Zustand setState
+6
+Dead Reckoning Loop
+Every 100ms: projects new lat/lng from last speed + heading; calls setLatLng on Leaflet marker
+requestAnimationFrame + haversine math
+7
+Real WS Ping arrives
+Computes divergence from interpolated pos; lerp corrects if <5m, snap if ≥5m
+haversine distance check → smooth or snap
+8
+ETA Poll (30s)
+GET /api/eta/{stop_id} → Fastify proxies to Python ML; assembles 8-feature vector, runs RF inference
+scikit-learn predict() → eta_min, eta_max, confidence
+9
+Status Bar
+Reads vehicleState from shared Zustand — renders appropriate bar text, color, animation
+Zero additional API calls — pure state machine
+1.3 WebSocket Message Schema
+All real-time position updates flow through a single compact message format, reducing payload by 94% vs naive JSON:
+Field
+Type
+Example
+Purpose
+state
+string enum
+ACTIVE
+ACTIVE | SPARSE | LOST | BUFFERING | SYNCING — drives UI state machine
+lat / lng
+float
+16.704521
+Current bus coordinates — updated by dead reckoning between pings
+heading
+float
+142.3
+Degrees 0–360 — used by dead reckoning to project next position
+speed
+float
+28.4 km/h
+Vehicle speed — multiplied by elapsed time in reckoning loop
+tier
+string enum
+FULL
+FULL | REDUCED | MINIMAL | DEAD — controls ETA confidence width
+confidence_radius_m
+integer
+5
+Circle radius in metres shown on map — grows as signal weakens
+rtt_ms
+integer
+84
+Round-trip time — displayed in Network Toggle panel live stats
+buffer_count
+integer
+0
+GPS events queued during DEAD mode — shown in status bar text
+ts
+unix epoch
+1714000000
+Server timestamp — used to compute ping_gap_seconds for ML features
+2. Service Architecture
+2.1 Fastify Node.js Server
+The Fastify server is the central API gateway. It handles all authentication, routes REST requests, manages WebSocket connections, proxies ML requests to Python, and runs background jobs for ghost bus detection and late night monitoring.
+Module
+Package
+Responsibility
+Auth routes
+jose · bcrypt · Prisma
+POST /auth/register, /auth/login, /auth/refresh, /auth/logout, GET /auth/me — RS256 JWT with httpOnly refresh cookie
+WebSocket relay
+@fastify/websocket · ioredis
+WS /ws/bus/{bus_id} — authenticate, subscribe Redis channel:bus:{id}, broadcast to all clients
+REST API
+Prisma · ioredis
+GET /api/bus, /api/stops, /api/eta, /api/bus/anomalies, /api/bus/checkin-status — fleet + safety endpoints
+ML proxy
+Axios (server)
+Forwards /api/eta/* to Python FastAPI microservice; caches responses in Redis for 15s
+Background scanner
+Node setInterval
+Every 60s: scans Redis bus state for ghost bus conditions; every 60s: checks late night driver check-in
+Safety endpoints
+Prisma · Resend
+POST /api/sos (student safety), POST /api/escort/generate, GET /api/escort/{token}/position
+Rate limiting
+fastify-rate-limit
+5 registrations/IP/hour, 10 logins/IP/15min, 3 SOS/student/hour, 20 email-checks/IP/min
+Simulator control
+Axios forward
+POST /api/simulator/network-mode → Python simulator; adjusts RTT, payload, interval live
+2.2 Python ML Microservice
+A separate FastAPI service loaded with a pre-trained RandomForestRegressor model. Inference is < 5ms. The service reads bus state from Redis, assembles the 8-feature vector, and returns a confidence-aware ETA range.
+Feature
+Source
+Why it matters
+stops_remaining
+PostgreSQL route query
+Primary predictor — bus position in sequence vs destination stop
+current_speed
+Redis bus:{id}:position
+Fast bus → lower ETA; stationary bus → ghost bus suspect
+time_of_day
+server datetime
+Rush hour (8–9am) vs off-peak changes ETA significantly
+day_of_week
+server datetime
+Weekend schedules differ; Monday congestion patterns
+signal_tier (0–3)
+Redis bus:{id}:meta
+Directly drives confidence_width — tier 3 (DEAD) widens range 2.5×
+ping_gap_seconds
+Redis last_ping_ts
+Staleness of position data — grows linearly in uncertainty formula
+buffer_queue_size
+Redis bus:{id}:buffer ZSET
+Buffered events indicate how much position recovery is pending
+rtt_ms
+Redis bus:{id}:meta
+Network quality proxy — high RTT correlates with unreliable future pings
+2.3 Redis Key Architecture
+Key Pattern
+Type
+TTL
+Contents
+bus:{id}:state
+Hash
+120s
+state (ACTIVE/SPARSE/LOST…), last updated — expires → drives LOST transition
+bus:{id}:position
+Hash
+120s
+lat, lng, heading, speed, ts — read by ML + WS snapshot
+bus:{id}:meta
+Hash
+300s
+rtt_ms, tier, confidence_radius_m, buffer_count, last_ping_ts
+bus:{id}:buffer
+ZSET
+none
+GPS events queued during DEAD mode — score = ts; flushed on reconnect
+channel:bus:{id}
+Pub/Sub
+none
+Broadcast channel — Fastify publishes, all WS handlers subscribe
+session:{jti}
+String
+900s
+Access token JTI → user_id; DEL on logout for instant revocation
+refresh:{jti}
+String
+604800s
+Refresh token JTI → user_id (7 days); DEL on logout
+eta:{stop_id}
+String
+15s
+Cached ML ETA response — prevents hammering Python service every 30s poll
+latenight:{bus_id}
+Hash
+600s
+last_checkin_ts, overdue (bool), deviation_detected — fast UI reads
+2.4 PostgreSQL Schema Summary
+Table
+Key Columns
+Purpose
+users
+id (UUID), email, hashed_password, role, verified, created_at
+Single source of identity — students, drivers, admins all share this table
+students
+id, user_id (FK), name, college_id_hash, phone_hash
+Student profile — college_id and phone hashed for privacy
+drivers
+id, user_id (FK), license_no, bus_id (FK nullable), active
+Driver profile — bus_id null until admin assigns route
+buses
+id, route_id (FK), plate, active
+Fleet registry — each bus has one route
+routes
+id, name, waypoints (JSONB)
+Route geometry — ordered lat/lng waypoints used for deviation detection
+stops
+id, route_id (FK), name, lat, lng, sequence
+Ordered stop list — sequence used for stops_remaining ML feature
+refresh_tokens
+jti, user_id (FK), expires_at, revoked
+JWT refresh token store — supports rotation and instant revocation
+sos_events
+id, student_id_hash, bus_id, lat, lng, ts, status, cancelled
+Safety log — student_id hashed; never stored in plain form
+escort_tokens
+token, student_id, bus_id, destination_stop_id, expires_at, used
+Shareable journey links — 2hr expiry enforced at DB level
+driver_checkins
+id, driver_id, bus_id, ts, late_night_mode
+Audit trail — every check-in logged; used for missed-check-in alert
+anomaly_log
+id, bus_id, type, stationary_minutes, detected_at, resolved_at
+Ghost bus + deviation events — persists after Redis TTL expires
+anomaly_reports
+id, bus_id, student_id, reason, created_at
+Student-submitted ghost bus reports — reviewed by admin
+historical_arrivals
+VIEW — avg arrival by stop_id + hour + day_of_week
+Fallback ETA when model operates on dead reckoning data
+3. Vehicle State Machine
+The state machine is the heart of IZUM's resilience design. Redis TTLs drive automatic state transitions — if no ping arrives before a key expires, state degrades automatically without any explicit timeout logic in application code.
+State
+Trigger
+Marker
+ETA Display
+Status Bar Text
+ACTIVE
+Ping < 10s gap; tier = FULL
+Green pulse
+'Arrives in 8 min'
+Hidden — no bar rendered
+SPARSE
+Ping 10–30s; tier = REDUCED
+Yellow ring
+'7–10 min'
+'Signal weak — updates every 15s'
+LOST
+Ping 30–90s; tier = MINIMAL
+Orange ring
+'6–13 min (est.)'
+'Signal lost — estimating position'
+BUFFERING
+Gap > 90s; tier = DEAD
+Red static
+'5–15 min (est.)'
+'Signal lost — buffering N updates'
+SYNCING
+Reconnection — buffer flush in progress
+Blue pulse
+Returns to precise
+'Reconnected — syncing N updates'
+GHOST_BUS
+Stationary > 15min, zero speed variation
+Ghost icon loop
+Fallback historical
+'Bus 2 may be inactive — verifying'
+3.1 Dead Reckoning Algorithm
+When no WS ping arrives, the frontend projects position every 100ms using the last known speed and heading. This ensures the marker always moves — even on degraded signal.
+Variable
+Formula / Logic
+Distance per frame (m)
+dist = (speed_kmh / 3.6) × 0.1  →  converts km/h to m/s, multiplies by 100ms
+New latitude
+newLat = lat + (dist / 111320) × cos(toRad(heading))
+New longitude
+newLng = lng + (dist / 111320) × sin(toRad(heading))
+Divergence check
+haversine(interpolated, real_ping) — if ≤ 5m: lerp correction over 500ms; if > 5m: snap + expand circle
+Throttle guard
+timestamp diff check — actual position update only if > 100ms since last; rAF runs at 60fps
+DOM optimisation
+setLatLng() skipped if position delta < 0.5m — prevents redundant DOM updates at near-zero speed
+4. API Endpoint Master List
+Method
+Endpoint
+Service
+Used By
+WS
+/ws/bus/{bus_id}
+Fastify
+Live map (P1), Status bar (P4) — persistent connection, JWT auth in Upgrade header
+POST
+/auth/register
+Fastify
+Registration (R1) — bcrypt hash, Prisma transaction, RS256 JWT pair response
+GET
+/auth/check-email
+Fastify
+Registration (R1) — real-time availability check, debounced 400ms, rate limited
+POST
+/auth/login
+Fastify
+Login (R2) — httpOnly Secure SameSite=Strict cookie for refresh token
+POST
+/auth/refresh
+Fastify
+All protected pages — silent renewal; cookie sent automatically
+POST
+/auth/logout
+Fastify
+Login (R2) — DEL Redis session:{jti} + refresh:{jti}; clears cookie
+GET
+/auth/me
+Fastify
+Login (R2), Live map (P1), Stop-Centric (P2) — session restore on page load
+GET
+/api/bus/{bus_id}
+Fastify
+Live map (P1), Network toggle (P5), Ghost bus (P6), SOS (P7)
+GET
+/api/bus/{bus_id}/position
+Fastify
+Live map WS fallback (P1), Virtual escort (P8) — 30s HTTP poll backup
+GET
+/api/bus/anomalies
+Fastify
+Status bar (P4), Ghost bus (P6) — 60s background poll; returns flagged buses
+POST
+/api/bus/{bus_id}/report
+Fastify
+Ghost bus (P6) — student submits report; INSERT anomaly_reports
+GET
+/api/bus/{bus_id}/checkin-status
+Fastify
+Late night (P9) — every 60s; returns last_checkin_ago_s, next_due_in_s, overdue
+POST
+/api/bus/{bus_id}/checkin
+Fastify
+Late night (P9) — driver-only JWT; resets 10-min countdown ring
+GET
+/api/bus/{bus_id}/deviation
+Fastify
+Late night (P9) — compares actual position vs route waypoints
+GET
+/api/stops
+Fastify
+Live map (P1), Stop-centric (P2), Virtual escort (P8) — cached in Zustand
+GET
+/api/eta/{stop_id}
+Fastify → Python
+Live map (P1), Stop-centric (P2) — 30s poll; Redis cached 15s
+GET
+/api/eta/{stop_id}/detail
+Fastify → Python
+ETA detail (P3) — 20s poll; full model_features + uncertainty_bar_pct
+POST
+/api/simulator/network-mode
+Fastify → Python
+Network toggle (P5) — admin/demo only; adjusts RTT, payload, interval live
+GET
+/api/simulator/network-mode
+Fastify → Python
+Network toggle (P5) — page load; returns current mode config
+POST
+/api/simulator/reset
+Fastify → Python
+Network toggle (P5) — resets route + mode to Full Signal defaults
+POST
+/api/sos
+Fastify
+Silent SOS (P7) — fires after 10s cancel window; student_id from JWT not body
+GET
+/api/escort/generate
+Fastify
+Virtual escort (P8) — generates 16-byte hex token; 2hr expiry in DB
+GET
+/api/escort/{token}/position
+Fastify
+Virtual escort parent view (P8) — token auth only; relays Redis position
+GET
+/api/fleet
+Fastify
+Admin dashboard — fleet overview with all bus states
+GET
+/health
+Fastify
+Landing page (P10) — checks live demo reachability; show/hide CTA button
+5. Safety Feature Architecture
+5.1 Silent SOS (Page 7)
+Three rapid taps on a near-invisible shield icon (opacity 20%) within 800ms triggers a 10-second cancel window, then silently dispatches to campus security. No visible alarm. No red text. Haptic feedback only on mobile.
+Design Decision
+Rationale
+Shield icon at opacity-20
+Invisible to bystanders — student can trigger without being seen
+3 taps in < 800ms required
+Prevents accidental triggers from normal map interaction
+10-second cancel window
+Breathing room for accidental triggers — cancel bar drains visibly at top of screen
+No SOS text on screen
+Bystander-proof — no visual tells. Only haptic vibration on the student's phone
+Student ID from JWT, not body
+Prevents spoofed SOS — server extracts student_id from token sub claim
+GPS + bus position fallback
+If geolocation API is denied, uses Redis bus:{id}:position as location
+student_id hashed in DB
+SHA-256 hash — SOS events are pseudonymous; not linked to personal records by default
+Rate limit: 3 SOS/student/hr
+Prevents spam while preserving genuine emergency capacity
+Resend email within 2s
+Campus security alert sent before SOS row is even committed to DB
+5.2 Virtual Escort (Page 8)
+A student shares a token-based URL (expires in 2 hours) with a parent or warden. The escort viewer polls every 15 seconds — no login required, no app install. Shows bus position, route progress, and arrival status.
+5.3 Late Night Mode (Page 9)
+Activates automatically after 21:00. Overlays a deep dark theme on the map and adds a 10-minute driver check-in countdown ring. A missed check-in fires an immediate security alert via Resend. Route deviation beyond 100m highlights expected vs actual path.
+Ring State
+Time Since Checkin
+Ring Fill
+Behaviour
+On time
+0–6 min
+100% → 40%
+Green depletion, no urgency text
+Due soon
+6–9 min
+40% → 10%
+Amber ring, 'Check-in due soon' label
+Overdue
+9–10 min
+10% → 0%
+Red rapid pulse, 'Check-in overdue' warning
+ALERT FIRED
+> 10 min
+0% (static)
+Ring stops, shakes, security email dispatched
+6. Frontend — 14 Pages at a Glance
+#
+Page
+Key Frontend
+Key Backend
+Auth
+R1
+Registration
+RHF · Zod · Framer Motion
+Fastify · Prisma · bcrypt · jose
+Public
+R2
+Login
+RHF · Axios interceptor · Zustand
+Fastify · Redis sessions · jose
+Public
+1
+Live Map
+React Leaflet · rAF dead reckoning · WS
+Fastify WS + Python ML
+Student
+2
+Stop-Centric
+Fuse.js · Framer · 30s ETA poll
+Fastify · Python ML · Redis cache
+Student
+3
+ETA Detail
+UncertaintyBar · ModelFeaturePanel
+Python FastAPI ML service
+Student
+4
+Status Bar
+Zero-backend WS overlay component
+None (reads WS stream)
+Student
+5
+Network Toggle
+ModeCard · LiveStatsBar · 2s poll
+Fastify + Python simulator
+Admin
+6
+Ghost Bus Alert
+SVG countdown ring · 60s poll modal
+Fastify + Node BG scanner · Prisma
+Student
+7
+Silent SOS
+Vibration API · Geolocation · 10s timer
+Fastify · Prisma · Resend
+Student
+8
+Virtual Escort
+React Leaflet · 15s poll · share sheet
+Fastify · Prisma · crypto
+Token only
+9
+Late Night Mode
+SVG ring · D3 · route overlay
+Fastify · Prisma · Resend · setInterval
+Driver + Student
+10
+Landing Page
+tsParticles · Framer · Leaflet preview
+None (static)
+Public
+11
+Architecture Docs
+SVG inline · D3 · Floating UI tooltips
+None (static)
+Public
+12
+Payload & API Docs
+Shiki syntax HL · Accordion · Clipboard
+None (static)
+Public
+7. Build Phases — Implementation Roadmap
+The project is structured into 6 sequential phases. Each phase produces independently testable, deployable components. Later phases build on earlier foundations without requiring rewrites.
+Phase 1 — Foundation & Infrastructure
+Duration: Days 1–3  |  Milestone: Live database + Auth API working
+Task
+Owner
+Definition of Done
+Initialise Fastify + TypeScript project
+Backend
+npm scripts: dev, build, lint all green; tsconfig strict mode
+Configure PostgreSQL 16 + Prisma schema
+Backend
+prisma migrate dev creates all tables; seed script populates test fleet
+Configure Redis 7 with ioredis client
+Backend
+PING returns PONG; SET/GET/EXPIRE working in integration test
+Implement RS256 JWT key generation
+Backend
+Private key signs, public key verifies; keys stored in /secrets (gitignored)
+Build POST /auth/register
+Backend
+Returns 201 with JWT pair; 409 on duplicate email; bcrypt cost 12
+Build POST /auth/login + /auth/refresh + /auth/logout
+Backend
+httpOnly cookie strategy; Redis session store; instant revocation on logout
+Build GET /auth/me
+Backend
+Returns user object from JWT; used by all protected pages for session restore
+JWT middleware (Fastify preHandler)
+Backend
+Rejects requests with expired/invalid tokens with 401 before route handler runs
+Rate limiting setup (fastify-rate-limit)
+Backend
+Registration, login, email-check limits configured; returns 429 on breach
+Initialise React + Vite + TypeScript + Tailwind frontend
+Frontend
+npm run dev starts; HMR working; Tailwind JIT active
+Build Registration page (R1)
+Frontend
+React Hook Form + Zod validation; POST /auth/register; role selector; redirect on success
+Build Login page (R2)
+Frontend
+httpOnly cookie flow; Axios interceptor for 401 → auto-refresh; role-based redirect
+Zustand auth store
+Frontend
+Stores access_token + user in memory; cleared on logout; persists across tab focus
+Phase 2 — GPS Simulator & Real-Time Pipeline
+Duration: Days 4–6  |  Milestone: Live bus marker moving on a map in browser
+Task
+Owner
+Definition of Done
+Build Python GPS simulator (FastAPI)
+Python
+Emits dlat, dlng, dhdg, speed, tier every 5s; configurable route loop
+Implement 4 network simulation modes
+Python
+POST /simulator/network-mode switches RTT target, payload size, interval live
+Fastify WS handler (/ws/bus/{bus_id})
+Backend
+Upgrades connection, verifies JWT in Upgrade header, subscribes to Redis channel
+Redis write pipeline (state / position / meta)
+Backend
+Each ping writes 3 hash keys with TTL; correct TTL drives state transitions
+Redis pub/sub broadcast
+Backend
+Publish on channel:bus:{id}; all WS handlers receive and fan out
+Vehicle state machine (TTL expiry logic)
+Backend
+State degrades ACTIVE→SPARSE→LOST→BUFFERING automatically on TTL miss
+React Leaflet map scaffold (Page 1)
+Frontend
+OpenStreetMap tiles loading; MapContainer centred on campus
+WebSocket client + Zustand vehicleStore
+Frontend
+Connects to /ws/bus/{id}; updates vehicleState, lat, lng, tier, confidence_radius_m
+Dead reckoning loop (requestAnimationFrame)
+Frontend
+Marker moves every 100ms from speed + heading; haversine divergence check
+Confidence circle (React Leaflet Circle)
+Frontend
+Radius = confidence_radius_m from WS message; hidden in ACTIVE state
+Stop markers + route polyline
+Frontend
+GET /api/stops once on load; rendered as Leaflet markers with name popup
+HTTP fallback polling (30s)
+Frontend
+Axios polls GET /api/bus/{id}/position every 30s when WS connection drops
+Phase 3 — ML ETA Service & Student Views
+Duration: Days 7–9  |  Milestone: ETA cards live with confidence ranges
+Task
+Owner
+Definition of Done
+Train RandomForestRegressor ETA model
+Python / ML
+Synthetic dataset: 8 features × route; model.score() ≥ 0.85; saved as eta_model.joblib
+Build Python ML microservice (FastAPI)
+Python / ML
+GET /eta/{stop_id}: assembles feature vector from Redis, runs inference, returns eta_min/max/confidence
+Uncertainty calculation algorithm
+Python / ML
+confidence_width = base × signal_factor × staleness_factor; uncertainty_bar_pct clamped 0–100
+Fastify ML proxy + Redis ETA cache
+Backend
+Proxies to Python; caches eta:{stop_id} for 15s; reduces ML calls by ~90% at peak
+Build Stop-Centric view (Page 2)
+Frontend
+Stop cards with ETABadge, LeaveNowPill, ConfidenceRing; Fuse.js search; 30s poll
+Leave-now logic (client-side)
+Frontend
+calcLeaveNow() compares eta_min to walkTime preference; LEAVE_NOW / LEAVE_SOON / WAIT
+Build ETA Detail page (Page 3)
+Frontend
+Full model_features panel; UncertaintyBar width from uncertainty_bar_pct; 20s poll
+Dead reckoning fallback display
+Frontend
+FallbackBanner slides down when dead_reckoning = true; shows historical_avg_arrival
+ETA Detail state machine (4 display modes)
+Frontend
+FULL/REDUCED/MINIMAL/LOST map to bar width, fill color, text format, banner visibility
+Honest Status Bar (Page 4)
+Frontend
+Reads vehicleState from shared WS Zustand; AnimatePresence mount/unmount; 6 states mapped
+Ghost Bus poll (Page 4 background)
+Frontend
+GET /api/bus/anomalies every 60s; triggers GHOST_BUS bar state when non-empty
+Phase 4 — Safety Features
+Duration: Days 10–11  |  Milestone: SOS, Escort, Late Night all functional
+Task
+Owner
+Definition of Done
+Build POST /api/sos endpoint
+Backend
+Extracts student_id from JWT sub; hashes before INSERT sos_events; triggers Resend within 2s
+Silent SOS frontend (Page 7)
+Frontend
+3-tap detection in 800ms; 10s cancel bar drain; vibration API; toast slide-up; screen flash
+Build GET /api/escort/generate
+Backend
+crypto.randomBytes(16) token; INSERT escort_tokens with expires_at; returns shareable URL
+Build GET /api/escort/{token}/position
+Backend
+Validates token + expiry; reads Redis position; returns lat/lng, eta, journey_complete
+Virtual escort — student link generator (Page 8)
+Frontend
+ShareJourneyButton → modal with URL; navigator.share() on mobile
+Virtual escort — parent viewer (Page 8)
+Frontend
+Token from URL path; 15s poll; read-only Leaflet map; RouteProgressBar; JourneyCompleteScreen
+Build late night check-in endpoints
+Backend
+GET /checkin-status returns overdue flag; POST /checkin driver-only JWT; setInterval alert scanner
+Build route deviation endpoint
+Backend
+GET /api/bus/{id}/deviation: computes nearest route waypoint, returns deviation_meters
+Late Night Mode frontend (Page 9)
+Frontend
+21:00 auto-activation; SVG countdown ring; overdue shake; deviation highlight on Leaflet
+Ghost Bus backend scanner
+Backend
+Node setInterval 60s: scans bus state Redis keys; flags stationary > 15min; INSERTs anomaly_log
+Ghost Bus alert modal (Page 6)
+Frontend
+60s poll; AnimatePresence bounce-in; SVG countdown ring; Report button POSTs anomaly_report
+Resend email integration
+Backend
+Configured for SOS, missed check-in, route deviation — all fire within 2s of detection
+Phase 5 — Admin, Demo Controls & Docs Site
+Duration: Days 12–13  |  Milestone: Full judge-facing demo experience ready
+Task
+Owner
+Definition of Done
+Network Toggle Panel (Page 5)
+Frontend
+4 mode cards with glow + pulse; POST on tap; LiveStatsBar with 2s counter animation
+Admin route guard
+Frontend
+React Router redirect to /map if role !== admin|demo; server-side role check on POST
+Admin fleet overview (GET /api/fleet)
+Backend
+Returns all buses with current state, driver, route — admin dashboard data
+Landing page (Page 10)
+Frontend
+tsParticles hero; Framer scroll triggers; Leaflet demo loop; /health reachability check for CTA
+Architecture docs page (Page 11)
+Frontend
+Inline SVG system diagram with CSS dot animation; D3 state machine; Floating UI tooltips
+Payload & API docs page (Page 12)
+Frontend
+Shiki static syntax highlight; EndpointAccordion AnimatePresence; copy-to-clipboard on all blocks
+Static docs deploy (Netlify/Vercel)
+DevOps
+Vite dist/ deployed; all 3 docs pages (P10–P12) load < 1.5s LCP; no server required
+Performance budget validation
+Frontend
+JS bundle < 120KB gzip; Tailwind purge; Leaflet lazy-loaded; tsParticles lite variant
+Phase 6 — Hardening, Security & Demo Prep
+Duration: Day 14  |  Milestone: Production-ready, judge demo scripted
+Task
+Owner
+Definition of Done
+End-to-end integration tests
+QA
+Registration → Login → WS connect → ETA → SOS flow all passing
+Security audit: JWT, cookies, rate limits
+Security
+No localStorage token storage; httpOnly cookie verified; rate limits fire correctly
+Privacy verification: PII hashing
+Security
+student_id, phone, college_id all hashed before DB insert; no plaintext PII in logs
+Load test WebSocket fanout
+Backend
+50 concurrent WS clients receive broadcast within 100ms; no head-of-line blocking
+Redis TTL edge case testing
+Backend
+TTL expiry correctly transitions state ACTIVE→SPARSE→LOST→BUFFERING; SYNCING on reconnect
+Demo script: 4 network modes live
+Demo
+Judge can toggle Full→Reduced→Minimal→Dead and see status bar + ETA range change in real time
+Demo script: SOS trigger
+Demo
+3-tap on shield; cancel window; confirmation toast — judge can perform in < 30 seconds
+Demo script: Late Night Mode
+Demo
+Override clock to 21:00; countdown ring visible; simulate missed check-in → alert fires
+Demo script: Ghost Bus detection
+Demo
+Simulator configured as stationary; anomaly detected within 60s; modal appears
+Deployment: Railway / Render (backend)
+DevOps
+Fastify + Python services deployed; env vars set; health checks passing
+Final docs review
+Docs
+All 12 pages consistent with deployed API; no dead links; payload comparison table accurate
+8. Complete Technology Stack
+Scope
+Package / Service
+Version
+Role
+Frontend
+React
+18.3+
+Component tree for all 14 pages
+Frontend
+TypeScript
+5.4+
+Type-safe forms, API calls, WS handling
+Frontend
+Vite
+5.2+
+Build tool — fast dev server + tree-shaken production bundle
+Frontend
+Tailwind CSS
+3.4+
+Utility-first styling — dark theme, responsive
+Frontend
+Framer Motion
+11+
+Page transitions, status bar animations, SOS flash
+Frontend
+Zustand
+4.5+
+Client state — auth tokens, vehicleState, ETA data
+Frontend
+Axios
+1.6+
+HTTP client with 401 auto-refresh interceptor
+Frontend
+React Router v6
+6.23+
+Role-based routing + protected route guards
+Frontend
+React Leaflet
+4.2+
+Declarative Leaflet map — Pages 1, 8, 10
+Frontend
+React Hook Form
+7.51+
+Uncontrolled form state with field-level validation
+Frontend
+Zod
+3.23+
+Client + server schema validation (mirrors Pydantic)
+Frontend
+react-hot-toast
+2.4+
+Success / error notifications
+Frontend (selective)
+Fuse.js
+7.0+
+Client-side fuzzy stop search (Page 2)
+Frontend (selective)
+tsParticles lite
+3.3+
+Hero particle background (Page 10) — < 10KB
+Frontend (selective)
+Floating UI
+2.3+
+Architecture diagram SVG tooltips (Page 11)
+Frontend (selective)
+D3.js
+7.9+
+State machine arc diagram (Pages 9, 11)
+Frontend (selective)
+Shiki
+1.6+
+Static syntax highlighting at build time (Page 12)
+Node.js Backend
+Fastify
+4.27+
+HTTP + WS server — replaces Express for lower overhead
+Node.js Backend
+@fastify/websocket
+8.3+
+WS upgrade handling; subscribes Redis pub/sub
+Node.js Backend
+fastify-rate-limit
+9.1+
+Per-IP rate limits on auth + safety endpoints
+Node.js Backend
+fastify-cookie
+9.3+
+httpOnly Secure SameSite=Strict cookie for refresh token
+Node.js Backend
+Prisma ORM
+5.14+
+Type-safe DB queries; transaction support for registration
+Node.js Backend
+ioredis
+5.3+
+Redis client — pub/sub, pipeline, TTL management
+Node.js Backend
+jose
+5.2+
+RS256 JWT sign + verify — private key never leaves server
+Node.js Backend
+bcrypt (Node)
+5.1+
+Password hashing at cost factor 12
+Node.js Backend
+Resend
+3.2+
+Transactional email — SOS, late night alerts
+Python Backend
+FastAPI
+0.111+
+GPS simulator + ML microservice — async ASGI
+Python Backend
+Uvicorn
+0.29+
+ASGI server for FastAPI
+Python Backend
+scikit-learn
+1.4+
+RandomForestRegressor ETA model
+Python Backend
+Joblib
+1.4+
+Model serialisation — loads eta_model.joblib at startup
+Python Backend
+redis-py
+5+
+Redis client for ML feature assembly from bus state
+Python Backend
+Pydantic v2
+2.7+
+Request/response schema validation
+Infrastructure
+PostgreSQL
+16
+Primary persistence — users, fleet, safety, routes
+Infrastructure
+Redis
+7
+Real-time state, pub/sub, session store, ETA cache
+Infrastructure
+Node.js
+20 LTS
+Runtime for Fastify server
+Infrastructure
+Netlify / Vercel
+—
+Static docs site hosting (Pages 10–12)
+Infrastructure
+Railway / Render
+—
+Backend service hosting — no Docker constraint
+IZUM  |  System Architecture & Build Phases  |  ThinkRoot × Vortex Hackathon 2026
