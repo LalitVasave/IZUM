@@ -1,56 +1,69 @@
 import { PrismaClient } from '@prisma/client';
+
 const prisma = new PrismaClient();
 
 async function main() {
+  console.log('Seeding database...');
+
   // 1. Create a Route
-  const route = await prisma.route.create({
-    data: {
-      name: "Campus Loop A",
-      waypoints: JSON.stringify([
-        [34.0522, -118.2437],
-        [34.0550, -118.2437],
-        [34.0550, -118.2400],
-        [34.0522, -118.2400]
-      ])
+  const route = await prisma.route.upsert({
+    where: { id: '00000000-0000-0000-0000-000000000001' },
+    update: {},
+    create: {
+      id: '00000000-0000-0000-0000-000000000001',
+      name: 'Campus Loop A',
+      waypoints: [
+        { lat: 34.0522, lng: -118.2437 },
+        { lat: 34.0530, lng: -118.2450 },
+        { lat: 34.0540, lng: -118.2460 },
+        { lat: 34.0550, lng: -118.2440 },
+        { lat: 34.0522, lng: -118.2437 }
+      ]
     }
   });
 
-  // 2. Create Stops
-  const stops = [
-    { name: "Central Library", lat: 34.0522, lng: -118.2437, sequence: 1 },
-    { name: "Science Plaza", lat: 34.0550, lng: -118.2437, sequence: 2 },
-    { name: "Student Union", lat: 34.0550, lng: -118.2400, sequence: 3 },
-    { name: "Engineering Block", lat: 34.0522, lng: -118.2400, sequence: 4 },
+  console.log(`Route created: ${route.name}`);
+
+  // 2. Create Stops for the Route
+  const stopsData = [
+    { name: 'Library (North Entrance)', lat: 34.0522, lng: -118.2437, sequence: 1 },
+    { name: 'Student Union Building', lat: 34.0530, lng: -118.2450, sequence: 2 },
+    { name: 'Science Complex', lat: 34.0540, lng: -118.2460, sequence: 3 },
+    { name: 'Engineering Block', lat: 34.0550, lng: -118.2440, sequence: 4 }
   ];
 
-  for (const stop of stops) {
-    await prisma.stop.create({
+  for (const stop of stopsData) {
+    const s = await prisma.stop.create({
       data: {
+        route_id: route.id,
         name: stop.name,
         lat: stop.lat,
         lng: stop.lng,
-        sequence: stop.sequence,
-        route_id: route.id
-      },
+        sequence: stop.sequence
+      }
     });
+    console.log(`Stop created: ${s.name}`);
   }
 
-  // 3. Create a Bus for the route
-  await prisma.bus.create({
-    data: {
-      id: "677f5a54-406a-4d24-8186-0a2b84920478", // Specific ID for bus_01 mock
-      plate: "IZUM-001",
-      route_id: route.id
+  // 3. Create a Bus
+  const bus = await prisma.bus.upsert({
+    where: { id: '00000000-0000-0000-0000-000000000002' },
+    update: {},
+    create: {
+      id: '00000000-0000-0000-0000-000000000002',
+      route_id: route.id,
+      plate: 'IZUM-01'
     }
   });
 
-  console.log("Seeded route, stops, and bus successfully.");
+  console.log(`Bus created: ${bus.plate}`);
+  console.log('Seeding complete.');
 }
 
 main()
   .catch((e) => {
     console.error(e);
-    // process.exit(1); // Removed to avoid @types/node error if not installed
+    process.exit(1);
   })
   .finally(async () => {
     await prisma.$disconnect();

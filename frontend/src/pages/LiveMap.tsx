@@ -22,40 +22,6 @@ const LiveMap: React.FC = () => {
   const { updateVehicle, lat, lng, confidence_radius_m, state } = useVehicleStore();
 
   useEffect(() => {
-    // Connect to WebSocket
-    // For local dev, we assume the user already got a token and we might send it.
-    // For simulation, we just connect without token auth for simplicity, or dummy token.
-    const ws = new WebSocket(`ws://localhost:3000/ws/bus/bus_01?token=dummy`);
-    
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        updateVehicle({
-          lat: data.lat,
-          lng: data.lng,
-          heading: data.heading,
-          speed: data.speed,
-          tier: data.tier,
-          state: data.state,
-          confidence_radius_m: data.confidence_radius_m,
-          ts: data.ts
-        });
-
-        // Snap marker to real position on ping
-        if (markerRef.current) {
-          markerRef.current.setLatLng([data.lat, data.lng]);
-        }
-      } catch (err) {
-        console.error("WS Parse Error", err);
-      }
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, [updateVehicle]);
-
-  useEffect(() => {
     // Dead Reckoning Loop
     let lastTime = performance.now();
     let animationFrameId: number;
