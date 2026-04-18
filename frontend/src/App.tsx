@@ -26,6 +26,9 @@ import NetworkSimulation from './pages/NetworkSimulation';
 import ArchitectureDocs from './pages/ArchitectureDocs';
 import ApiPayloadDocs from './pages/ApiPayloadDocs';
 
+// Guards
+import ProtectedRoute from './components/ProtectedRoute';
+
 function App() {
   return (
     <Router>
@@ -45,30 +48,30 @@ function App() {
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="/home" element={<LandingPage />} />
 
-          {/* Auth */}
+          {/* Auth — public */}
           <Route path="/register" element={<Registration />} />
           <Route path="/login" element={<Login />} />
 
-          {/* Core */}
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/map" element={<LiveMap />} />
-          <Route path="/stops" element={<Stops />} />
-          <Route path="/eta/:stop_id" element={<ETADetail />} />
+          {/* Core — protected */}
+          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/map" element={<ProtectedRoute><LiveMap /></ProtectedRoute>} />
+          <Route path="/stops" element={<ProtectedRoute><Stops /></ProtectedRoute>} />
+          <Route path="/eta/:stop_id" element={<ProtectedRoute><ETADetail /></ProtectedRoute>} />
 
-          {/* Safety */}
-          <Route path="/safety" element={<SafetyHub />} />
-          <Route path="/safety/sos" element={<SilentSOS />} />
-          <Route path="/safety/escort" element={<VirtualEscort />} />
-          <Route path="/escort/:token" element={<VirtualEscort />} />
+          {/* Safety — protected */}
+          <Route path="/safety" element={<ProtectedRoute><SafetyHub /></ProtectedRoute>} />
+          <Route path="/safety/sos" element={<ProtectedRoute><SilentSOS /></ProtectedRoute>} />
+          <Route path="/safety/escort" element={<ProtectedRoute><VirtualEscort /></ProtectedRoute>} />
+          <Route path="/escort/:token" element={<ProtectedRoute><VirtualEscort /></ProtectedRoute>} />
 
-          {/* Features */}
-          <Route path="/status" element={<LateNightMode />} />
-          <Route path="/anomaly" element={<GhostBusAlert />} />
-          <Route path="/network" element={<NetworkSimulation />} />
+          {/* Features — protected */}
+          <Route path="/status" element={<ProtectedRoute><LateNightMode /></ProtectedRoute>} />
+          <Route path="/anomaly" element={<ProtectedRoute><GhostBusAlert /></ProtectedRoute>} />
+          <Route path="/network" element={<ProtectedRoute><NetworkSimulation /></ProtectedRoute>} />
 
-          {/* Docs */}
-          <Route path="/docs/architecture" element={<ArchitectureDocs />} />
-          <Route path="/docs/api" element={<ApiPayloadDocs />} />
+          {/* Docs — protected */}
+          <Route path="/docs/architecture" element={<ProtectedRoute><ArchitectureDocs /></ProtectedRoute>} />
+          <Route path="/docs/api" element={<ProtectedRoute><ApiPayloadDocs /></ProtectedRoute>} />
         </Routes>
       </div>
     </Router>

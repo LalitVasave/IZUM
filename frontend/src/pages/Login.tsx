@@ -2,11 +2,11 @@ import React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import axios from 'axios';
+import api from '../lib/axios';
 import { useNavigate, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ArrowLeft, BadgeInfo, Lock, ArrowRight } from 'lucide-react';
-// import useAuthStore from '../store/authStore';
+import useAuthStore from '../store/useAuthStore';
 
 const LoginSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -24,9 +24,9 @@ const Login: React.FC = () => {
 
   const onSubmit = async (data: LoginForm) => {
     try {
-      const response = await axios.post('/api/auth/login', data);
+      const response = await api.post('/auth/login', data);
       toast.success("Login successful");
-      // useAuthStore.getState().setAuth(response.data.access_token, response.data.user);
+      useAuthStore.getState().setAuth(response.data.access_token, response.data.user);
       navigate(response.data.user.role === 'driver' ? '/status' : '/dashboard');
     } catch (error: any) {
       toast.error(error.response?.data?.message || error.response?.data?.error || "Login failed");

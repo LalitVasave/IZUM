@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import axios from 'axios';
+import api from '../lib/axios';
 import TopAppBar from '../components/TopAppBar';
 import { motion } from 'framer-motion';
 import { Signal, Clock, AlertTriangle, Info } from 'lucide-react';
@@ -24,7 +24,7 @@ const ETADetail: React.FC = () => {
   useEffect(() => {
     const fetchETA = async () => {
       try {
-        const res = await axios.get(`/api/eta/${stop_id}`);
+        const res = await api.get(`/eta/${stop_id}`);
         setEta(res.data);
       } catch (err) {
         console.error("Failed to fetch ETA", err);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../lib/axios';
 import { Moon, AlertTriangle, Activity, Battery, Eye, Signal } from 'lucide-react';
 import { motion } from 'framer-motion';
 import TopAppBar from '../components/TopAppBar';
@@ -25,7 +25,7 @@ const LateNightMode: React.FC = () => {
 
   const handleCheckin = async () => {
     try {
-      await axios.post('/api/driver/checkin', { late_night: true });
+      await api.post('/driver/checkin', { late_night: true });
       setCountdown(240);
       setIsOverdue(false);
       toast.success("Check-in successful");

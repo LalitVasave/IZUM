@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../lib/axios';
 import { Shield, CheckCircle, AlertTriangle, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import TopAppBar from '../components/TopAppBar';
@@ -38,7 +38,7 @@ const SilentSOS: React.FC = () => {
 
   const sendSOS = async () => {
     try {
-      await axios.post('/api/sos', {
+      await api.post('/sos', {
         lat: 34.0522, // Should get from geolocation
         lng: -118.2437,
         bus_id: 'bus_01'

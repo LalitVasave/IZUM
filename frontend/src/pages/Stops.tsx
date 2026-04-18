@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import api from '../lib/axios';
 import TopAppBar from '../components/TopAppBar';
 import ETACard from '../components/ETACard';
 import { Search } from 'lucide-react';
@@ -21,7 +21,7 @@ const Stops: React.FC = () => {
   useEffect(() => {
     const fetchStops = async () => {
       try {
-        const res = await axios.get('/api/stops');
+        const res = await api.get('/stops');
         setStops(res.data);
       } catch (err) {
         console.error("Failed to fetch stops", err);

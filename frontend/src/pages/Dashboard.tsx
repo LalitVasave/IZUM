@@ -2,10 +2,12 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Map, List, Shield, Activity, ChevronRight, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import useAuthStore from '../store/useAuthStore';
 
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuthStore();
 
   const quickActions = [
     { label: 'Live Map', icon: <Map className="w-6 h-6" />, path: '/map', desc: 'Track buses in real-time', color: 'text-primary' },
@@ -34,7 +36,7 @@ const Dashboard: React.FC = () => {
             transition={{ delay: 0.1 }}
             className="text-4xl font-black tracking-tight"
           >
-            Welcome, <span className="text-primary italic">Student</span>
+            Welcome, <span className="text-primary italic">{user?.name?.split(' ')[0] ?? 'Student'}</span>
           </motion.h1>
           <p className="text-white/40 text-sm font-medium uppercase tracking-widest">Campus Mobility Hub</p>
         </div>

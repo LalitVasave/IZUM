@@ -2,12 +2,12 @@ import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import axios from 'axios';
+import api from '../lib/axios';
 import { useNavigate, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import TopAppBar from '../components/TopAppBar';
 import { ArrowRight } from 'lucide-react';
-// import useAuthStore from '../store/authStore'; // to be created
+import useAuthStore from '../store/useAuthStore';
 
 const RegisterSchema = z.object({
   name: z.string().min(2, "Name is too short").max(100),
@@ -30,9 +30,9 @@ const Registration: React.FC = () => {
 
   const onSubmit = async (data: RegisterForm) => {
     try {
-      const response = await axios.post('/api/auth/register', data); // will map /api to backend via Vite proxy
+      const response = await api.post('/auth/register', data); // will map /api to backend via Vite proxy
       toast.success("Registration successful");
-      // useAuthStore.getState().setAuth(response.data.access_token, response.data.user);
+      useAuthStore.getState().setAuth(response.data.access_token, response.data.user);
       navigate('/login');
     } catch (error: any) {
       toast.error(error.response?.data?.message || "Registration failed");
